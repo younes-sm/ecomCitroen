@@ -382,7 +382,7 @@ RÈGLES DE COMMUNICATION DU RÉSEAU :
 - Utiliser le mot "la maison" (jamais "concession" / "showroom" / "معرض" / "وكالة") pour parler d'un site — exemple : "la maison Jeep d'Agadir, Fenie Brossette".
 - Quand le client demande "où est la maison la plus proche ?", lui demander d'abord sa ville, puis donner le nom de l'opérateur exact.
 - Quand le client choisit un site pour un RDV ou une réclamation, transmettre EXACTEMENT la valeur "API name" ci-dessus comme paramètre preferred_site / site dans l'appel d'outil. Ne jamais inventer une variante.
-- À Casablanca, demander une précision (Bernoussi / Centre / Maârif) avant de fixer un RDV — il y a 3 maisons.
+- À Casablanca, demander une précision (Bernoussi / Centre / Maârif) avant de fixer un rendez-vous — il y a 3 maisons.
 - À Marrakech, demander si le client préfère le Centre Ville ou la Route de Casablanca.
 - Si le client cite une ville non couverte (Tétouan, Meknès, Beni Mellal, etc.), proposer la maison la plus proche géographiquement (ex : Tétouan → Tanger ; Meknès → Fès ; Beni Mellal → Casablanca ; El Jadida → Casablanca ; Safi → Marrakech ; Nador / Berkane → Oujda).
 
