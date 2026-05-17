@@ -11,21 +11,25 @@ const SF_CASE_URL =
   "https://stellantis-e.my.salesforce.com/services/data/v54.0/sobjects/Case";
 
 // RecordTypeIds for the Stellantis Case object (from NBS Consulting API doc).
-// Each combination of Type × department maps to one RecordTypeId.
+// Each combination of Type × department maps to one RecordTypeId. These IDs
+// are MANDATORY in the payload — Stellantis routing rules use them to dispatch
+// Cases to the right team (RDV/SAV → workshop, Réclamation/SAV → CRC, etc).
 //
-// IMPORTANT: even though these IDs exist in the org, Salesforce will reject
-// the create with INVALID_CROSS_REFERENCE_KEY ("this ID value isn't valid for
-// the user") unless the integration user's Profile has the RecordType
-// assigned in "Record Type Settings → Case". If you hit that error, the fix
-// is admin-side. As a temporary workaround, set the env var to an empty
-// string ("") to omit RecordTypeId entirely — Salesforce then falls back to
-// the user's default RecordType.
+// History: there was an earlier "INVALID_CROSS_REFERENCE_KEY" error when the
+// integration user's Profile didn't have the RecordType assigned. That's been
+// fixed admin-side by Abderrahim (Profile → Record Type Settings → Case). The
+// values below are the live IDs and are always sent in the payload now.
+// Env vars can override per-deploy if Stellantis ever changes the IDs.
+//
+// Trim + fall back so a setting of "" in .env doesn't accidentally blank the
+// field — historically that was an escape hatch but Stellantis now requires
+// the ID and the escape hatch caused the field to be missing in production.
 const RECORD_TYPE_INFOS_SAV =
-  process.env.SF_RECORD_TYPE_INFOS_SAV ?? "012Tv00000IRHP0IAP";
+  (process.env.SF_RECORD_TYPE_INFOS_SAV?.trim() || "012Tv00000IRHP0IAP");
 const RECORD_TYPE_RDV_SAV =
-  process.env.SF_RECORD_TYPE_RDV_SAV ?? "012Tv00000IRHP3IAP";
+  (process.env.SF_RECORD_TYPE_RDV_SAV?.trim() || "012Tv00000IRHP3IAP");
 const RECORD_TYPE_RECLAMATION_SAV =
-  process.env.SF_RECORD_TYPE_RECLAMATION_SAV ?? "012Tv00000IRHP6IAP";
+  (process.env.SF_RECORD_TYPE_RECLAMATION_SAV?.trim() || "012Tv00000IRHP6IAP");
 
 const TOKEN_SAFETY_WINDOW_MS = 60_000;
 const TOKEN_DEFAULT_TTL_SECONDS = 3600;
@@ -127,6 +131,11 @@ async function postLead(token: string, payload: LeadPayload): Promise<Response> 
 }
 
 export async function createLead(payload: LeadPayload): Promise<SalesforceCreateResponse> {
+  // Always log the payload going to Salesforce — same observability the Case
+  // helper has. Lets dev / on-call correlate "lead not in CRM" reports with
+  // the exact JSON Stellantis received.
+  console.log("[salesforce/lead] → POST", JSON.stringify(payload, null, 2));
+
   const token = await getAccessToken();
   let res = await postLead(token, payload);
 
@@ -138,10 +147,13 @@ export async function createLead(payload: LeadPayload): Promise<SalesforceCreate
 
   if (!res.ok) {
     const text = await res.text();
+    console.error(`[salesforce/lead] ✗ ${res.status} ${text.slice(0, 400)}`);
     throw new Error(`Salesforce lead creation failed (${res.status}): ${text}`);
   }
 
-  return (await res.json()) as SalesforceCreateResponse;
+  const json = (await res.json()) as SalesforceCreateResponse;
+  console.log(`[salesforce/lead] ✓ created id=${json.id} success=${json.success}`);
+  return json;
 }
 
 // ─── Jeep test-drive helpers ──────────────────────────────────────────────
@@ -219,7 +231,7 @@ export function buildJeepLead(input: JeepTestDriveInput): LeadPayload {
     : "";
 
   const descriptionLines = [
-    `Source: Rihla AI agent (Jeep Maroc demo)`,
+    `Source: Chatbot (Jeep Maroc demo)`,
     input.preferredSlot ? `Créneau préféré: ${input.preferredSlot}` : null,
     input.modelSlug ? `Modèle: ${modelLabel}` : null,
     input.conversationId ? `Conversation ID: ${input.conversationId}` : null,
@@ -309,13 +321,15 @@ export async function createCase(payload: CasePayload): Promise<SalesforceCreate
   return (await res.json()) as SalesforceCreateResponse;
 }
 
+export type ApvInterventionType = "service_rapide" | "mechanical" | "bodywork";
+
 export type JeepApvAppointmentInput = {
   fullName: string;
   phone: string;
   email: string;
   vehicleModel: string;
   vin: string;
-  interventionType: "mechanical" | "bodywork";
+  interventionType: ApvInterventionType;
   city: string;
   preferredDate: string;
   preferredSlot: "morning" | "afternoon";
@@ -330,7 +344,7 @@ export type JeepApvComplaintInput = {
   email: string;
   vehicleModel: string;
   vin: string;
-  interventionType: "mechanical" | "bodywork";
+  interventionType: ApvInterventionType;
   site: string;
   serviceDate?: string | null;
   reason: string;
@@ -338,6 +352,12 @@ export type JeepApvComplaintInput = {
   refNumber: string;
   conversationId?: string | null;
 };
+
+function interventionLabel(t: ApvInterventionType): string {
+  if (t === "bodywork") return "Carrosserie";
+  if (t === "service_rapide") return "Service Rapide";
+  return "Mécanique";
+}
 
 function modelLabelFromSlug(slug: string): string {
   return JEEP_MODEL_LABELS[slug] ?? slug;
@@ -369,12 +389,11 @@ function toAppointmentDateTime(date: string, slot: "morning" | "afternoon"): str
 
 export function buildJeepApvAppointmentCase(input: JeepApvAppointmentInput): CasePayload {
   const fullName = input.fullName.trim() || "(non communiqué)";
-  const interventionFr =
-    input.interventionType === "bodywork" ? "Carrosserie" : "Mécanique";
+  const interventionFr = interventionLabel(input.interventionType);
   const slotFr = input.preferredSlot === "afternoon" ? "Après-midi" : "Matin";
 
   const description = [
-    `Source : Rihla AI agent (Jeep Maroc — APV)`,
+    `Source : Chatbot (Jeep Maroc — APV)`,
     `Référence interne : ${input.refNumber}`,
     `Type d'intervention : ${interventionFr}`,
     `Créneau préféré : ${slotFr}`,
@@ -395,7 +414,7 @@ export function buildJeepApvAppointmentCase(input: JeepApvAppointmentInput): Cas
     Description: description,
     is_Web__c: true,
     Type: "Prise de RDV",
-    ...(RECORD_TYPE_RDV_SAV ? { RecordTypeId: RECORD_TYPE_RDV_SAV } : {}),
+    RecordTypeId: RECORD_TYPE_RDV_SAV,
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
     Date_de_RDV__c: toAppointmentDateTime(input.preferredDate, input.preferredSlot),
   };
@@ -403,11 +422,10 @@ export function buildJeepApvAppointmentCase(input: JeepApvAppointmentInput): Cas
 
 export function buildJeepApvComplaintCase(input: JeepApvComplaintInput): CasePayload {
   const fullName = input.fullName.trim() || "(non communiqué)";
-  const interventionFr =
-    input.interventionType === "bodywork" ? "Carrosserie" : "Mécanique";
+  const interventionFr = interventionLabel(input.interventionType);
 
   const description = [
-    `Source : Rihla AI agent (Jeep Maroc — Réclamation)`,
+    `Source : Chatbot (Jeep Maroc — Réclamation)`,
     `Référence interne : ${input.refNumber}`,
     `Type d'intervention : ${interventionFr}`,
     input.serviceDate ? `Date de la prestation : ${input.serviceDate}` : null,
@@ -429,7 +447,7 @@ export function buildJeepApvComplaintCase(input: JeepApvComplaintInput): CasePay
     Description: description,
     is_Web__c: true,
     Type: "Réclamation",
-    ...(RECORD_TYPE_RECLAMATION_SAV ? { RecordTypeId: RECORD_TYPE_RECLAMATION_SAV } : {}),
+    RecordTypeId: RECORD_TYPE_RECLAMATION_SAV,
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
   };
 }

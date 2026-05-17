@@ -20,6 +20,23 @@ export type ApvPersistResult = {
   warnings: string[];
 };
 
+// Strip any obvious placeholder string the model might have shoved into a
+// required field ("<customer_phone_from_session>", "<customer_email_if_collected_by_STEP_4>",
+// "TBD", "(non communiqué)", any value with < or > or "STEP_"). These come
+// from the model hallucinating template syntax instead of asking for the
+// real value — they crash Salesforce with INVALID_EMAIL_ADDRESS / invalid
+// phone format. Treat them as missing so the per-field validators reject
+// cleanly and the lead lands with a warning instead of a Salesforce 400.
+function sanitisePlaceholder(raw: unknown): string {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (s.includes("<") || s.includes(">")) return "";
+  if (/STEP_?\d|customer_(phone|email|name|lastname)|collected_by_STEP|_from_session/i.test(s)) return "";
+  if (/^\(?non\s+communiqué\)?$/i.test(s)) return "";
+  if (/^TBD$/i.test(s)) return "";
+  return s;
+}
+
 export async function persistAppointment(args: {
   brandSlug: string;
   conversationId: string | null;
@@ -39,14 +56,20 @@ export async function persistAppointment(args: {
     ? await nextRefNumber({ brandId, kind: "RDV" })
     : `RDV-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 999).toString().padStart(3, "0")}`;
 
-  const phoneRaw = String(i.phone ?? "");
+  const fullNameClean = sanitisePlaceholder(i.fullName);
+  if (!fullNameClean && i.fullName) warnings.push("fullName-placeholder-stripped");
+
+  const phoneRaw = sanitisePlaceholder(i.phone);
+  if (!phoneRaw) warnings.push(`phone-placeholder-stripped`);
   const phone = validatePhone(phoneRaw, "MA");
   if (!phone.ok) warnings.push(`phone-format: ${phone.reason ?? "?"}`);
   const phoneFinal = phone.ok ? phone.canonical : normalizePhone(phoneRaw, "MA");
 
-  const email = validateEmail(String(i.email ?? ""));
+  const emailRaw = sanitisePlaceholder(i.email);
+  if (!emailRaw) warnings.push(`email-placeholder-stripped`);
+  const email = validateEmail(emailRaw);
   if (!email.ok) warnings.push(`email-format: ${email.reason ?? "?"}`);
-  const emailFinal = email.ok ? email.canonical : String(i.email ?? "");
+  const emailFinal = email.ok ? email.canonical : emailRaw;
 
   const vin = validateVin(String(i.vin ?? ""));
   if (!vin.ok) warnings.push(`vin-format: ${vin.reason ?? "?"}`);
@@ -61,7 +84,11 @@ export async function persistAppointment(args: {
     ? date.canonical
     : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  const intervention = String(i.interventionType ?? "mechanical") as "mechanical" | "bodywork";
+  const interventionRaw = String(i.interventionType ?? "service_rapide");
+  const intervention: "service_rapide" | "mechanical" | "bodywork" =
+    interventionRaw === "bodywork" || interventionRaw === "mechanical" || interventionRaw === "service_rapide"
+      ? interventionRaw
+      : "service_rapide";
   const slot = String(i.preferredSlot ?? "morning") as "morning" | "afternoon";
   const cndp = i.cndpConsent === true;
   if (!cndp) warnings.push("cndp-missing");
@@ -74,7 +101,7 @@ export async function persistAppointment(args: {
     brandSlug: args.brandSlug,
     conversationId: args.conversationId,
     refNumber,
-    fullName: String(i.fullName ?? ""),
+    fullName: fullNameClean,
     phone: phoneFinal,
     email: emailFinal,
     vehicleBrand: String(i.vehicleBrand ?? ""),
@@ -99,7 +126,7 @@ export async function persistAppointment(args: {
           `[salesforce/case] → POST appointment ref=${finalRef} conv=${args.conversationId ?? "n/a"}`
         );
         const { payload, response } = await submitJeepApvAppointment({
-          fullName: String(i.fullName ?? ""),
+          fullName: fullNameClean,
           phone: phoneFinal,
           email: emailFinal,
           vehicleModel: String(i.vehicleModel ?? ""),
@@ -131,7 +158,7 @@ export async function persistAppointment(args: {
     ok: !!persisted,
     refNumber: persisted?.refNumber ?? refNumber,
     summary: {
-      fullName: String(i.fullName ?? ""),
+      fullName: fullNameClean,
       phone: phoneFinal,
       email: emailFinal,
       vehicleBrand: String(i.vehicleBrand ?? ""),
@@ -165,13 +192,20 @@ export async function persistComplaint(args: {
     ? await nextRefNumber({ brandId, kind: "REL" })
     : `REL-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 999).toString().padStart(3, "0")}`;
 
-  const phone = validatePhone(String(i.phone ?? ""), "MA");
-  if (!phone.ok) warnings.push(`phone-format: ${phone.reason ?? "?"}`);
-  const phoneFinal = phone.ok ? phone.canonical : normalizePhone(String(i.phone ?? ""), "MA");
+  const fullNameClean = sanitisePlaceholder(i.fullName);
+  if (!fullNameClean && i.fullName) warnings.push("fullName-placeholder-stripped");
 
-  const email = validateEmail(String(i.email ?? ""));
+  const phoneRaw = sanitisePlaceholder(i.phone);
+  if (!phoneRaw) warnings.push("phone-placeholder-stripped");
+  const phone = validatePhone(phoneRaw, "MA");
+  if (!phone.ok) warnings.push(`phone-format: ${phone.reason ?? "?"}`);
+  const phoneFinal = phone.ok ? phone.canonical : normalizePhone(phoneRaw, "MA");
+
+  const emailRaw = sanitisePlaceholder(i.email);
+  if (!emailRaw) warnings.push("email-placeholder-stripped");
+  const email = validateEmail(emailRaw);
   if (!email.ok) warnings.push(`email-format: ${email.reason ?? "?"}`);
-  const emailFinal = email.ok ? email.canonical : String(i.email ?? "");
+  const emailFinal = email.ok ? email.canonical : emailRaw;
 
   const vin = validateVin(String(i.vin ?? ""));
   if (!vin.ok) warnings.push(`vin-format: ${vin.reason ?? "?"}`);
@@ -187,7 +221,11 @@ export async function persistComplaint(args: {
   const reason = String(i.reason ?? "").trim();
   if (reason.length < 20) warnings.push("reason-too-short");
 
-  const intervention = String(i.interventionType ?? "mechanical") as "mechanical" | "bodywork";
+  const interventionRaw = String(i.interventionType ?? "service_rapide");
+  const intervention: "service_rapide" | "mechanical" | "bodywork" =
+    interventionRaw === "bodywork" || interventionRaw === "mechanical" || interventionRaw === "service_rapide"
+      ? interventionRaw
+      : "service_rapide";
   const cndp = i.cndpConsent === true;
   if (!cndp) warnings.push("cndp-missing");
 
@@ -199,7 +237,7 @@ export async function persistComplaint(args: {
     brandSlug: args.brandSlug,
     conversationId: args.conversationId,
     refNumber,
-    fullName: String(i.fullName ?? ""),
+    fullName: fullNameClean,
     phone: phoneFinal,
     email: emailFinal,
     vehicleBrand: String(i.vehicleBrand ?? ""),
@@ -222,7 +260,7 @@ export async function persistComplaint(args: {
           `[salesforce/case] → POST complaint ref=${finalRef} conv=${args.conversationId ?? "n/a"}`
         );
         const { payload, response } = await submitJeepApvComplaint({
-          fullName: String(i.fullName ?? ""),
+          fullName: fullNameClean,
           phone: phoneFinal,
           email: emailFinal,
           vehicleModel: String(i.vehicleModel ?? ""),
@@ -254,7 +292,7 @@ export async function persistComplaint(args: {
     ok: !!persisted,
     refNumber: persisted?.refNumber ?? refNumber,
     summary: {
-      fullName: String(i.fullName ?? ""),
+      fullName: fullNameClean,
       phone: phoneFinal,
       email: emailFinal,
       vehicleBrand: String(i.vehicleBrand ?? ""),

@@ -64,12 +64,14 @@ export function getLangConfig(id: VoiceLang) {
 
 /** APV-aware welcomes — used by widgets that ALSO handle after-sales (RDV /
  *  Info / Réclamation), currently jeep-ma only. The default sales-only
- *  greetings live in the LANGS table above. */
+ *  greetings live in the LANGS table above. PRINCIPLE: open with a warm
+ *  one-line introduction and STOP. Do not list capabilities, do not ask a
+ *  question, do not push the customer. Let them say what they came for. */
 const APV_GREETINGS: Record<VoiceLang, string> = {
-  fr: "Bonjour, je suis NARA, votre conseillère Jeep Maroc. Je peux vous accompagner pour choisir un véhicule, organiser un rendez-vous d'atelier, répondre à vos questions sur la garantie, l'entretien ou les accessoires, ou enregistrer une réclamation. Comment puis-je vous être utile ?",
-  darija: "السلام، أنا نارا، المستشارة ديالك ف Jeep Maroc. كنقدر نعاونك تختار طوموبيل، تحجز رنديفو فالأتولي، تجاوب على أسئلة الضمان، الصيانة، ولا الإكسيسوار، ولا تسجل شكاية. كيفاش نقدر نخدمك ؟",
-  ar: "أهلاً بكم، أنا نارا، مستشارتكم لدى Jeep المغرب. يسعدني مساعدتكم في اختيار مركبة، حجز موعد للصيانة، الإجابة عن استفساراتكم بشأن الضمان والصيانة والإكسسوارات، أو تسجيل شكوى. كيف يمكنني خدمتكم ؟",
-  en: "Hello, I'm NARA, your Jeep Morocco advisor. I can help you select a vehicle, schedule a service appointment, answer your questions on warranty, maintenance or accessories, or register a complaint. How may I assist you today?",
+  fr: "Bonjour, je suis NARA, votre conseillère Jeep Maroc. Je vous écoute.",
+  darija: "السلام، أنا نارا، المستشارة ديالك ف Jeep Maroc. تفضل، كنسمعك.",
+  ar: "أهلاً بكم، أنا نارا، مستشارتكم لدى Jeep المغرب. تفضّلوا، أنا في خدمتكم.",
+  en: "Hello, I'm NARA, your Jeep Morocco advisor. I'm listening.",
 };
 
 /** Returns the greeting to use as the chat opener — falls back to the

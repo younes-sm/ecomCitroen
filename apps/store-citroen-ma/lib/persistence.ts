@@ -96,6 +96,50 @@ export async function appendImageCard(conversationId: string, payload: ImageCard
   } catch { /* swallow */ }
 }
 
+/** Returns true if ANY of the 4 booking tools has already been recorded for
+ *  this conversation. Used by the voice end_call handler to detect "stalled
+ *  booking" — agent emitted confirmation text but never fired the tool. */
+export async function hasBookingToolFired(conversationId: string): Promise<boolean> {
+  const supa = client();
+  if (!supa) return false;
+  try {
+    const { data } = await (supa.from("tool_calls") as any)
+      .select("name")
+      .eq("conversation_id", conversationId)
+      .in("name", [
+        "book_test_drive",
+        "book_showroom_visit",
+        "book_service_appointment",
+        "submit_complaint",
+      ])
+      .limit(1);
+    return Array.isArray(data) && data.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Fetch the last N messages for a conversation, newest first. Used by the
+ *  voice end_call stalled-booking detector to scan the transcript for the
+ *  CNDP-yes + agent-confirmation pattern and try to recover the lead. */
+export async function fetchRecentMessages(
+  conversationId: string,
+  limit = 30,
+): Promise<Array<{ role: string; kind: string; text: string | null; created_at: string }>> {
+  const supa = client();
+  if (!supa) return [];
+  try {
+    const { data } = await (supa.from("messages") as any)
+      .select("role, kind, text, created_at")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function recordToolCall(args: {
   conversationId: string;
   name: string;
@@ -182,23 +226,43 @@ export async function updateFunnelCheckpoints(args: {
   } catch { /* swallow */ }
 }
 
+/** Result reported back to the chat route so it can emit a customer-friendly
+ *  message when Salesforce flags a duplicate (the customer's lead is already
+ *  in CRM — we don't want the agent to say "error", we want it to say "we
+ *  already have your details, a commercial will contact you"). */
+export type CaptureLeadResult = {
+  supabaseOk: boolean;
+  salesforce: "ok" | "duplicate" | "failed" | "skipped";
+  salesforceMessage?: string;
+};
+
 export async function captureLeadFromBooking(args: {
   conversationId: string;
   brandSlug: string;
   modelSlug: string;
   firstName: string;
   phone: string;
+  email?: string;
   city?: string;
   preferredSlot?: string;
   showroomName?: string;
   notes?: string;
-}): Promise<void> {
+}): Promise<CaptureLeadResult> {
+  const result: CaptureLeadResult = { supabaseOk: false, salesforce: "skipped" };
   const supa = client();
-  if (!supa) return;
+  if (!supa) return result;
+  // Trim + lightly validate email so a "yes, take it" garbage value doesn't
+  // poison the leads table. Anything that doesn't look like an email is
+  // dropped silently — Salesforce sync below will then skip the field too.
+  const cleanEmail = (() => {
+    const e = args.email?.trim();
+    if (!e) return undefined;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : undefined;
+  })();
   try {
     const { data: brandRow } = await supa.from("brands").select("id").eq("slug", args.brandSlug).single();
     const brandId = (brandRow as unknown as { id?: string } | null)?.id;
-    if (!brandId) return;
+    if (!brandId) return result;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const leadRow: any = {
       brand_id: brandId,
@@ -210,6 +274,7 @@ export async function captureLeadFromBooking(args: {
       preferred_slot: args.preferredSlot ?? null,
       status: "new",
     };
+    if (cleanEmail) leadRow.email = cleanEmail;
     if (args.showroomName) leadRow.showroom_name = args.showroomName;
     if (args.notes) leadRow.notes = args.notes;
     await (supa.from("leads") as any).insert(leadRow);
@@ -229,37 +294,63 @@ export async function captureLeadFromBooking(args: {
       lead_model_slug: args.modelSlug,
       ended_at: new Date().toISOString(),
     };
+    if (cleanEmail) {
+      convUpdate.lead_email = cleanEmail;
+      convUpdate.captured_email = new Date().toISOString();
+    }
     if (args.showroomName) convUpdate.lead_showroom = args.showroomName;
     await (supa.from("conversations") as any).update(convUpdate).eq("id", args.conversationId);
+    result.supabaseOk = true;
   } catch { /* swallow */ }
 
-  // Salesforce sync — Jeep only. Fire-and-forget so a slow / failing Stellantis
-  // CRM never blocks the user-facing booking confirmation. Logged either way
-  // so dev can see the result in the server terminal.
+  // Salesforce sync — Jeep only. AWAITED (not fire-and-forget anymore) so the
+  // chat route can detect DUPLICATES_DETECTED and switch the agent's message
+  // from "saved successfully" to "we already have your details on file — a
+  // commercial will reach out shortly". Without awaiting, the duplicate
+  // signal arrived after the response had already been streamed and the
+  // customer saw confusing "technique" messages while their info was in
+  // fact already saved.
   if (args.brandSlug === "jeep-ma") {
-    void (async () => {
-      try {
-        const result = await submitJeepTestDriveLead({
-          firstName: args.firstName,
-          phone: args.phone,
-          city: args.city,
-          modelSlug: args.modelSlug,
-          preferredSlot: args.preferredSlot,
-          showroom: args.showroomName,
-          conversationId: args.conversationId,
-        });
+    try {
+      const sfResult = await submitJeepTestDriveLead({
+        firstName: args.firstName,
+        phone: args.phone,
+        email: cleanEmail,
+        city: args.city,
+        modelSlug: args.modelSlug,
+        preferredSlot: args.preferredSlot,
+        showroom: args.showroomName,
+        conversationId: args.conversationId,
+      });
+      console.log(
+        `[salesforce] ✓ Jeep lead synced to Stellantis CRM: id=${sfResult.id} firstName=${args.firstName} model=${args.modelSlug} (conv=${args.conversationId})`
+      );
+      result.salesforce = "ok";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Stellantis Salesforce returns DUPLICATES_DETECTED (HTTP 400) when the
+      // phone or email matches an existing Lead. We log it as informational
+      // (not an error) and pass the signal up so the agent says the right
+      // thing to the customer.
+      const isDuplicate = /DUPLICATES_DETECTED|duplicateRule|Lead\s*Duplicate/i.test(msg);
+      if (isDuplicate) {
         console.log(
-          `[salesforce] ✓ Jeep lead synced to Stellantis CRM: id=${result.id} firstName=${args.firstName} model=${args.modelSlug} (conv=${args.conversationId})`
+          `[salesforce] ◷ Jeep lead duplicate detected — already in CRM. firstName=${args.firstName} phone=${args.phone}`
         );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        result.salesforce = "duplicate";
+        result.salesforceMessage = msg.slice(0, 200);
+      } else {
         console.error(
           `[salesforce] ✗ Jeep lead push failed for firstName=${args.firstName} phone=${args.phone}:`,
           msg
         );
+        result.salesforce = "failed";
+        result.salesforceMessage = msg.slice(0, 200);
       }
-    })();
+    }
   }
+
+  return result;
 }
 
 /* ─────────────────── APV (after-sales) persistence ─────────────────── */
@@ -274,7 +365,7 @@ export async function createServiceAppointment(args: {
   vehicleBrand: string;
   vehicleModel: string;
   vin: string;
-  interventionType: "mechanical" | "bodywork";
+  interventionType: "service_rapide" | "mechanical" | "bodywork";
   city: string;
   preferredDate: string;          // ISO yyyy-mm-dd
   preferredSlot: "morning" | "afternoon";
@@ -329,7 +420,7 @@ export async function createComplaint(args: {
   vehicleBrand: string;
   vehicleModel: string;
   vin: string;
-  interventionType: "mechanical" | "bodywork";
+  interventionType: "service_rapide" | "mechanical" | "bodywork";
   site: string;
   serviceDate?: string | null;
   reason: string;

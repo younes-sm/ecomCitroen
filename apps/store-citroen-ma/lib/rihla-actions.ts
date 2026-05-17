@@ -21,6 +21,7 @@ const TEST_DRIVE_EVENT = "rihla:test-drive";
 const IMAGE_CARD_EVENT = "rihla:image-card";
 const SHOWROOMS_EVENT = "rihla:showrooms";
 const VIDEO_CARD_EVENT = "rihla:video-card";
+const TYPE_REQUEST_EVENT = "rihla:type-request";
 
 export type ShowroomItem = {
   id: string;
@@ -51,6 +52,25 @@ export function onShowrooms(cb: (p: ShowroomsPayload) => void) {
   const listener = (e: Event) => cb((e as CustomEvent<ShowroomsPayload>).detail);
   window.addEventListener(SHOWROOMS_EVENT, listener);
   return () => window.removeEventListener(SHOWROOMS_EVENT, listener);
+}
+
+/** Payload for the explicit "open the input keyboard for this field" event.
+ *  The agent fires request_input(field) when it needs the customer to type a
+ *  sensitive value — way more reliable than regex-parsing the transcript. */
+export type TypeRequestPayload = {
+  field: "name" | "phone" | "email" | "vin";
+};
+
+export function emitTypeRequest(payload: TypeRequestPayload) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent<TypeRequestPayload>(TYPE_REQUEST_EVENT, { detail: payload }));
+}
+
+export function onTypeRequest(cb: (p: TypeRequestPayload) => void) {
+  if (typeof window === "undefined") return () => {};
+  const listener = (e: Event) => cb((e as CustomEvent<TypeRequestPayload>).detail);
+  window.addEventListener(TYPE_REQUEST_EVENT, listener);
+  return () => window.removeEventListener(TYPE_REQUEST_EVENT, listener);
 }
 
 export type ImageCardPayload = {
@@ -150,14 +170,51 @@ export function onFinancingUpdate(cb: (u: FinancingUpdate) => void) {
   return () => window.removeEventListener(FINANCING_EVENT, listener);
 }
 
+// Buffered snapshot of the most recent configurator change so it survives the
+// router.push → mount race. When the agent fires configure_car AND we need to
+// navigate to /models/{slug} at the same time, `dispatchEvent` runs *before*
+// ConfiguratorStage subscribes — and a stock CustomEvent has no replay, so the
+// visual stays on the old color despite the agent promising the change.
+//
+// We solve this with a tiny "last change" cache: emit() stores the change with
+// a timestamp + a sequence number, and any new subscriber consumes it if it's
+// fresh enough (1500 ms) and not already consumed by its own sequence number.
+// Listeners track the last seq they processed so they don't replay the same
+// change on every re-render.
+let pendingConfigChange: { change: ConfiguratorChange; seq: number; at: number } | null = null;
+let configSeq = 0;
+const CONFIG_REPLAY_WINDOW_MS = 1500;
+
 export function emitConfiguratorChange(change: ConfiguratorChange) {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent<ConfiguratorChange>(CONFIG_EVENT, { detail: change }));
+  configSeq += 1;
+  pendingConfigChange = { change, seq: configSeq, at: Date.now() };
+  window.dispatchEvent(
+    new CustomEvent<{ change: ConfiguratorChange; seq: number }>(CONFIG_EVENT, {
+      detail: { change, seq: configSeq },
+    })
+  );
 }
 
 export function onConfiguratorChange(cb: (c: ConfiguratorChange) => void) {
   if (typeof window === "undefined") return () => {};
-  const listener = (e: Event) => cb((e as CustomEvent<ConfiguratorChange>).detail);
+  let lastSeqHandled = 0;
+  const handle = (change: ConfiguratorChange, seq: number) => {
+    if (seq <= lastSeqHandled) return;
+    lastSeqHandled = seq;
+    cb(change);
+  };
+  // Replay the most recent change if it landed while we were mounting.
+  // Cap at CONFIG_REPLAY_WINDOW_MS so a stale snapshot doesn't fire when the
+  // user opens a fresh model page minutes later.
+  const pending = pendingConfigChange;
+  if (pending && Date.now() - pending.at < CONFIG_REPLAY_WINDOW_MS) {
+    handle(pending.change, pending.seq);
+  }
+  const listener = (e: Event) => {
+    const detail = (e as CustomEvent<{ change: ConfiguratorChange; seq: number }>).detail;
+    handle(detail.change, detail.seq);
+  };
   window.addEventListener(CONFIG_EVENT, listener);
   return () => window.removeEventListener(CONFIG_EVENT, listener);
 }
@@ -332,8 +389,35 @@ export function dispatchRihlaTool(call: RihlaToolCall, ctx: DispatchCtx): string
               ? input.angleIndex
               : undefined,
         };
-        // Only navigate if we're NOT already on the target model page — otherwise
-        // just update the live configurator to avoid a full reload.
+        // Widget mode (chatbot embedded on a 3rd-party page or brand site) has
+        // no in-page ConfiguratorStage to drive. Hijacking router.push() would
+        // navigate the HOST page away — terrible UX. Instead, send back an
+        // image-card showing the new color and surface a tool-result message
+        // the model can paraphrase ("voici l'Avenger en noir, ouvrez le
+        // configurateur pour interagir"). Skip emitConfiguratorChange so we
+        // don't leave a stale snapshot dangling for the next session.
+        if (widgetMode) {
+          const model = change.modelSlug ? findModel(change.modelSlug) : undefined;
+          if (model && change.colorId) {
+            // Reuse show_model_image to surface a fresh card. We don't pick a
+            // color-specific render here — the brand catalog at widget-mode
+            // doesn't carry per-color images. The card is a visual cue; the
+            // canonical configurator lives on the brand site.
+            emitImageCard({
+              modelSlug: model.slug,
+              imageUrl: model.heroImage,
+              caption: `${model.name} — ${change.colorId}`,
+              ctaUrl: model.pageUrl,
+            });
+            return `widget-mode: shown ${model.slug} card (color ${change.colorId} not previewable inline — direct customer to ${model.pageUrl} for live configurator)`;
+          }
+          return `widget-mode: configure_car ignored — open the brand site for the live configurator${model ? ` (${model.pageUrl})` : ""}`;
+        }
+        // Storefront mode: only navigate if we're NOT already on the target
+        // model page — otherwise just update the live configurator to avoid a
+        // full reload. emitConfiguratorChange buffers the change so the
+        // ConfiguratorStage component picks it up after the router.push
+        // completes (see lib/rihla-actions.ts emitConfiguratorChange).
         const targetPath = change.modelSlug
           ? `/${locale}/models/${change.modelSlug}`
           : null;
@@ -369,6 +453,19 @@ export function dispatchRihlaTool(call: RihlaToolCall, ctx: DispatchCtx): string
       case "end_call": {
         emitEndCall();
         return "call ended";
+      }
+      case "request_input": {
+        // Explicit "open the on-screen keyboard for this field" tool. The
+        // agent calls this on the same turn as its text instruction so the
+        // customer sees the input field appear right when prompted. Much
+        // more reliable than relying on transcript regex parsing to detect
+        // sensitive-field asks.
+        const rawField = String(input.field ?? "").toLowerCase();
+        const field = (
+          ["name", "phone", "email", "vin"].includes(rawField) ? rawField : "name"
+        ) as "name" | "phone" | "email" | "vin";
+        emitTypeRequest({ field });
+        return `keyboard opened for field=${field}`;
       }
       case "lookup_vin": {
         // APV (Jeep) — voice path. Look up the customer record from the mock

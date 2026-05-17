@@ -27,6 +27,12 @@ type Props = {
    *  forwarding it to the agent (typically via the same [FIELD_TYPED] path
    *  the keyboard uses). */
   onConfirm: (vin: string) => void;
+  /** Visual theme of the two scan buttons (NOT the camera + confirm modals,
+   *  which stay dark-on-black because they overlay the whole viewport). The
+   *  voice call view is dark, so the buttons there need light text. The chat
+   *  panel is white, so the buttons there need dark text. Defaults to "dark"
+   *  to preserve the voice-mode look. */
+  theme?: "dark" | "light";
 };
 
 type Labels = {
@@ -141,8 +147,15 @@ function labelsFor(locale: VoiceLang | null): Labels {
   return LABELS_FR;
 }
 
-export default function VinScanButtons({ accent, locale, onConfirm }: Props) {
+export default function VinScanButtons({ accent, locale, onConfirm, theme = "dark" }: Props) {
   const labels = labelsFor(locale);
+  // Tailwind utility groups for the two scan buttons. Keep the camera + confirm
+  // MODALS dark in both themes — they cover the whole viewport, so the host
+  // background colour doesn't matter.
+  const btnClass =
+    theme === "light"
+      ? "flex flex-1 items-center justify-center gap-1.5 rounded-2xl border border-black/10 bg-black/[0.03] px-3 py-2 text-[12px] text-black/80 transition hover:bg-black/[0.06] disabled:opacity-50"
+      : "flex flex-1 items-center justify-center gap-1.5 rounded-2xl border border-white/15 bg-white/[0.07] px-3 py-2 text-[12px] text-white/85 transition hover:bg-white/[0.12] disabled:opacity-50";
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -326,7 +339,7 @@ export default function VinScanButtons({ accent, locale, onConfirm }: Props) {
           type="button"
           onClick={() => void openCamera()}
           disabled={scanning}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl border border-white/15 bg-white/[0.07] px-3 py-2 text-[12px] text-white/85 transition hover:bg-white/[0.12] disabled:opacity-50"
+          className={btnClass}
           style={{ borderColor: `${accent}55` }}
         >
           {scanning ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} strokeWidth={2} />}
@@ -336,7 +349,7 @@ export default function VinScanButtons({ accent, locale, onConfirm }: Props) {
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={scanning}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl border border-white/15 bg-white/[0.07] px-3 py-2 text-[12px] text-white/85 transition hover:bg-white/[0.12] disabled:opacity-50"
+          className={btnClass}
           style={{ borderColor: `${accent}55` }}
         >
           {scanning ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} strokeWidth={2} />}

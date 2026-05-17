@@ -130,13 +130,14 @@ const LIVE_TOOLS = [
       },
       {
         name: "book_test_drive",
-        description: "Book a TEST DRIVE for a qualified lead. Use when the user wants to drive the car. Call at the end of the flow after collecting first name, mobile number, city, preferred slot, and the specific showroom if they chose one.",
+        description: "Book a TEST DRIVE for a qualified lead. MANDATORY : you MUST call this tool the moment the customer says 'oui' / 'yes' / any affirmative TO THE CNDP CONSENT QUESTION (loi 09-08). NEVER respond with confirmation text alone ('Parfait, je transmets votre demande...') without ALSO calling this tool in the SAME turn — that would silently drop the lead, which is the #1 voice bug clients have flagged. Fill firstName, phone, email (if provided), city, preferredSlot, showroomName from the conversation history. CNDP consent is implicit in the customer's just-given 'oui'.",
         parameters: {
           type: "OBJECT",
           properties: {
             slug: { type: "STRING" },
             firstName: { type: "STRING" },
             phone: { type: "STRING" },
+            email: { type: "STRING", description: "Customer email — optional. Ask once after phone; accept if customer prefers not to share." },
             city: { type: "STRING" },
             preferredSlot: { type: "STRING" },
             showroomName: { type: "STRING", description: "The exact showroom the customer chose from find_showrooms (e.g. 'Peugeot Riyadh — King Fahd Rd'). Verbatim." },
@@ -146,13 +147,14 @@ const LIVE_TOOLS = [
       },
       {
         name: "book_showroom_visit",
-        description: "Schedule a SHOWROOM VISIT (the user wants to come see the cars in person, not test-drive). Call after collecting first name, phone, city, preferred slot, and the chosen showroom.",
+        description: "Schedule a SHOWROOM VISIT (the user wants to come see the cars in person, not test-drive). MANDATORY : call this the moment the customer says 'oui' to the CNDP question. NEVER emit confirmation text without ALSO calling this tool in the same turn — that drops the lead silently.",
         parameters: {
           type: "OBJECT",
           properties: {
             slug: { type: "STRING" },
             firstName: { type: "STRING" },
             phone: { type: "STRING" },
+            email: { type: "STRING", description: "Customer email — optional. Ask once after phone." },
             city: { type: "STRING" },
             preferredSlot: { type: "STRING" },
             showroomName: { type: "STRING", description: "The exact showroom the customer chose. Verbatim." },
@@ -175,6 +177,17 @@ const LIVE_TOOLS = [
         description: "END THE CALL — call this IMMEDIATELY after your closing line whenever the user signals they're done. Triggers (any language, partial match): 'bye', 'goodbye', 'thanks', 'thank you', 'au revoir', 'merci', 'à bientôt', 'bonne journée', 'salut', 'شكرا', 'شكراً', 'بسلامة', 'في أمان الله', 'مع السلامة', 'يالله', 'يالاه', 'صافي', 'خلاص', 'تمام', 'تسلم', 'الله يعطيك العافية'. ALSO call after a successful book_test_drive + farewell. Never continue after a farewell — end_call is the only valid response.",
         parameters: { type: "OBJECT", properties: {} },
       },
+      {
+        name: "request_input",
+        description: "MANDATORY in voice — open the on-screen keyboard whenever you ask the customer to type a sensitive field (name, phone, email, VIN). Voice dictation is refused for these 4 fields. Call on the SAME turn as your text instruction ('Tapez votre prénom, …'). For VIN, this also surfaces the carte-grise camera + upload buttons.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            field: { type: "STRING", enum: ["name", "phone", "email", "vin"] },
+          },
+          required: ["field"],
+        },
+      },
       // ─── APV (after-sales) — Jeep widget only. Never call for other brands. ───
       {
         name: "lookup_vin",
@@ -187,7 +200,7 @@ const LIVE_TOOLS = [
       },
       {
         name: "book_service_appointment",
-        description: "APV ONLY. Submit the service-appointment (RDV) request once ALL fields are collected and the customer has explicitly given CNDP consent.",
+        description: "APV ONLY. MANDATORY : call this tool the moment the customer says 'oui' / 'yes' / any affirmative to the CNDP question. NEVER emit confirmation text ('Parfait, je transmets...') without ALSO calling this tool in the SAME turn — that drops the lead silently. Set cndpConsent=true (the customer just gave it).",
         parameters: {
           type: "OBJECT",
           properties: {
@@ -197,7 +210,7 @@ const LIVE_TOOLS = [
             vehicleBrand: { type: "STRING" },
             vehicleModel: { type: "STRING" },
             vin: { type: "STRING" },
-            interventionType: { type: "STRING", enum: ["mechanical", "bodywork"] },
+            interventionType: { type: "STRING", enum: ["service_rapide", "mechanical", "bodywork"] },
             city: { type: "STRING" },
             preferredDate: { type: "STRING" },
             preferredSlot: { type: "STRING", enum: ["morning", "afternoon"] },
@@ -209,7 +222,7 @@ const LIVE_TOOLS = [
       },
       {
         name: "submit_complaint",
-        description: "APV ONLY. Submit the complaint (réclamation) once all required fields are collected and CNDP consent is given.",
+        description: "APV ONLY. MANDATORY : call this the moment the customer says 'oui' to the CNDP question. NEVER emit confirmation text without ALSO calling this tool in the same turn — that drops the complaint silently. Set cndpConsent=true.",
         parameters: {
           type: "OBJECT",
           properties: {
@@ -219,7 +232,7 @@ const LIVE_TOOLS = [
             vehicleBrand: { type: "STRING" },
             vehicleModel: { type: "STRING" },
             vin: { type: "STRING" },
-            interventionType: { type: "STRING", enum: ["mechanical", "bodywork"] },
+            interventionType: { type: "STRING", enum: ["service_rapide", "mechanical", "bodywork"] },
             site: { type: "STRING" },
             serviceDate: { type: "STRING" },
             reason: { type: "STRING" },
@@ -610,11 +623,15 @@ export function useRihlaLive(
     // (The processor sends nothing until the WS is open — see startMic.)
     const ws = new WebSocket(url);
     wsRef.current = ws;
+    // Track session duration so unexpected closes ("user said 3 words then it
+    // died") can be distinguished from "10 minute call, then end_call".
+    const wsOpenedAt = Date.now();
     const micPromise = startMic(ws).catch((err) => {
       console.warn("[rihla-live] mic start failed", err);
     });
 
     ws.onopen = async () => {
+      void persistEvent({ kind: "ws_diag", phase: "open" });
       const [promptResult, voiceResult] = await Promise.all([promptPromise, voiceStartPromise]);
       const systemPrompt = promptResult?.systemPrompt ?? "";
       const resolvedVoice = promptResult?.voiceName ?? voiceName;
@@ -656,10 +673,24 @@ export function useRihlaLive(
     };
     ws.onerror = (ev) => {
       console.warn("[rihla-live] ws error", ev);
+      void persistEvent({
+        kind: "ws_diag",
+        phase: "error",
+        message: (ev as Event & { message?: string }).message ?? "(no message)",
+        durationMs: Date.now() - wsOpenedAt,
+      });
       updateState("error");
     };
     ws.onclose = (ev) => {
       console.warn(`[rihla-live] ws closed code=${ev.code} reason="${ev.reason}" wasClean=${ev.wasClean}`);
+      void persistEvent({
+        kind: "ws_diag",
+        phase: "close",
+        code: ev.code,
+        reason: ev.reason,
+        wasClean: ev.wasClean,
+        durationMs: Date.now() - wsOpenedAt,
+      });
       updateState("idle");
       stopMic();
     };
@@ -684,7 +715,9 @@ export function useRihlaLive(
   const disconnect = useCallback(() => {
     // Mark the voice conversation closed (best effort).
     if (conversationIdRef.current) {
-      void persistEvent({ kind: "end" });
+      // Include brandSlug so the server's stalled-booking recovery (in
+      // /api/rihla/voice/event) can scope the lead push to the right brand.
+      void persistEvent({ kind: "end", brandSlug });
     }
     wsRef.current?.close();
     wsRef.current = null;

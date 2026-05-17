@@ -15,6 +15,7 @@ import {
   onEndCall,
   onImageCard,
   onShowrooms,
+  onTypeRequest,
   onVideoCard,
   type ImageCardPayload,
   type ShowroomsPayload,
@@ -145,6 +146,10 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   // Most-recent image-card payload (used by the CallView so the customer can
   // SEE the car the agent is talking about during a voice call).
   const [callImage, setCallImage] = useState<ImageCardPayload | null>(null);
+  // Most-recent showroom list during a voice call. CallView doesn't show the
+  // chat messages, so without this the customer hears "we have 3 maisons" but
+  // sees nothing. We surface a compact overlay below the model image.
+  const [callShowrooms, setCallShowrooms] = useState<ShowroomsPayload | null>(null);
 
   // Bumped each time the assistant's transcript hints that the user should
   // type something (name, phone). The CallView watches this and auto-opens
@@ -187,8 +192,29 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
         const filtered = m.filter((x) => x.kind !== "showrooms");
         return [...filtered, { kind: "showrooms", role: "assistant", payload }];
       });
+      // Mirror to the voice overlay so the CallView can render the cards too.
+      setCallShowrooms(payload);
     });
   }, []);
+
+  // Explicit "open the on-screen keyboard" tool — fires from the agent's
+  // request_input(field) call. More reliable than transcript regex parsing
+  // which can miss certain phrasings. Bumps typeRequest immediately so the
+  // CallView keyboard pops + VinScanButtons mount (for VIN).
+  useEffect(() => {
+    return onTypeRequest((payload) => {
+      const placeholder =
+        payload.field === "vin"
+          ? vinPlaceholder(voiceLang)
+          : payload.field === "email"
+          ? emailPlaceholder(voiceLang)
+          : payload.field === "phone"
+          ? phonePlaceholder(voiceLang)
+          : namePlaceholder(voiceLang);
+      lastTypeRequestSnippetRef.current = `tool-request:${payload.field}:${Date.now()}`;
+      setTypeRequest({ id: Date.now(), placeholder, kind: payload.field });
+    });
+  }, [voiceLang]);
 
   const handleLiveToolCall = useCallback((call: LiveToolCall): string => {
     return dispatchRihlaTool(
@@ -308,7 +334,7 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
     writeStored(brand.slug, voiceLang, null);
   }, [brand.slug, voiceLang, live]);
 
-  const sendTextMessage = useCallback(async (text: string) => {
+  const sendTextMessage = useCallback(async (text: string, options?: { marker?: string }) => {
     const current = messagesRef.current;
     const userMsg: Msg = { kind: "text", role: "user", text };
     // Don't pre-create an empty assistant bubble — it leaves a visual artifact
@@ -319,9 +345,29 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
     const next: Msg[] = [...current, userMsg];
     setMessages(next);
     setIsStreaming(true);
+    // Capture WHETHER the agent was just asking for a sensitive field (VIN /
+    // name / phone / email). If so, the user's reply must be tagged with the
+    // [FIELD_TYPED] marker on the wire so the prompt's typed-input policy
+    // treats it as canonical input — otherwise the agent refuses with
+    // "tapez-le dans le champ qui vient d'apparaître" even though the user
+    // DID type it (chat mode has no voice dictation). The bubble in the UI
+    // still shows the raw text; we only prepend the marker on the API call.
+    const fieldKind = typeRequest?.kind;
+    // Explicit marker takes precedence — e.g. [MAISON_SELECTED] when the
+    // customer clicks a "Choisir" button on a showroom card. Prevents the
+    // agent from interpreting "Jeep Casablanca Bernoussi — Autohall" as a
+    // city mention and re-firing find_showrooms.
+    const explicitMarker = options?.marker;
+    // The user just sent something → reset the type-request dedupe key so the
+    // next assistant turn can re-trigger the keyboard / VIN-scan buttons.
+    // Without this, a fresh "votre nom ?" after a previous "votre nom ?" turn
+    // would be suppressed because the snippet matches.
+    lastTypeRequestSnippetRef.current = "";
+    setTypeRequest(null);
 
     if (live.isConnected) {
-      live.sendText(text);
+      const wireText = explicitMarker ? `${explicitMarker} ${text}` : text;
+      live.sendText(wireText);
       setIsStreaming(false);
       return;
     }
@@ -335,6 +381,20 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
       const apiMessages = next
         .filter((m): m is Extract<Msg, { kind: "text" }> => m.kind === "text")
         .map((m) => ({ role: m.role, content: m.text }));
+      // Tag the just-sent user turn with the explicit marker, OR with
+      // [FIELD_TYPED] if the agent was waiting on a sensitive field. Markers
+      // are documented in the system prompt and signal unambiguous user
+      // intent to the model (so it doesn't pattern-match on the raw text).
+      const wireMarker = explicitMarker ?? (fieldKind ? "[FIELD_TYPED]" : null);
+      if (wireMarker && apiMessages.length > 0) {
+        const last = apiMessages[apiMessages.length - 1];
+        if (last && last.role === "user") {
+          apiMessages[apiMessages.length - 1] = {
+            ...last,
+            content: `${wireMarker} ${last.content}`,
+          };
+        }
+      }
 
       // Compact session memory the server prepends to the system prompt.
       // The Gemini API itself only carries the text history forward, so the
@@ -401,6 +461,21 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
               return copy;
             });
             assistantStarted = true;
+            // Pop the right keyboard affordance when the agent asks for a
+            // sensitive field (name / phone / email / VIN). For VIN, this
+            // also surfaces the carte-grise camera + upload buttons above the
+            // chat input — same pattern used by the voice path via
+            // handleLiveTranscript. We dedupe on the matched snippet so the
+            // detection doesn't re-fire as more tokens stream in.
+            const detected = detectTypeRequest(textAcc, voiceLang);
+            if (detected && detected.snippet !== lastTypeRequestSnippetRef.current) {
+              lastTypeRequestSnippetRef.current = detected.snippet;
+              setTypeRequest({
+                id: Date.now(),
+                placeholder: detected.placeholder,
+                kind: detected.kind,
+              });
+            }
           } else if (ev.type === "tool") {
             dispatchRihlaTool(
               { name: ev.name, input: ev.input },
@@ -484,7 +559,14 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
       accent={accent}
       onClose={embedded ? null : () => setOpen(false)}
       callImage={callImage}
+      callShowrooms={callShowrooms}
       typeRequest={typeRequest}
+      sendShowroomChoice={(name) => {
+        if (isStreaming) return;
+        // Marker signals "this is a CARD SELECTION, not a city mention" so the
+        // agent doesn't re-fire find_showrooms (see jeep-apv-prompt.ts STEP 7).
+        void sendTextMessage(name, { marker: "[MAISON_SELECTED]" });
+      }}
     />
   );
 
@@ -627,10 +709,29 @@ type PanelProps = {
   accent: string;
   onClose: (() => void) | null;
   callImage: ImageCardPayload | null;
+  callShowrooms: ShowroomsPayload | null;
   typeRequest: { id: number; placeholder?: string; kind?: "vin" | "email" | "phone" | "name" } | null;
+  /** Click handler for the "Choisir" button on each showroom card. Sends the
+   *  showroom name as a user message — without it, the cards are a dead-end
+   *  visual. */
+  sendShowroomChoice: (name: string) => void;
 };
 
 function BubblePanel(p: PanelProps) {
+  // Auto-focus the chat textarea the moment the assistant finishes streaming.
+  // Without this the customer has to click into the input on every turn —
+  // clients have flagged this as annoying on mobile especially.
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (p.stage !== "chat" || p.mode === "voice") return;
+    if (p.isStreaming) return;
+    // Wait one paint so the textarea is mounted + enabled after `disabled` flips.
+    const id = requestAnimationFrame(() => {
+      chatInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [p.isStreaming, p.stage, p.mode]);
+
   // Voice mode / call view: render immediately when the user is in voice
   // mode, so the WebSocket-warmup gap doesn't show as a blank screen. The
   // CallView itself handles all live states (idle / connecting / listening
@@ -650,6 +751,8 @@ function BubblePanel(p: PanelProps) {
         agentName={p.brand.agentName ?? "Rihla"}
         locale={p.voiceLang}
         currentImage={p.callImage}
+        currentShowrooms={p.callShowrooms}
+        onShowroomChoice={p.sendShowroomChoice}
         typeRequest={p.typeRequest}
         onSendText={(t) => {
           // Send to Gemini Live with a [FIELD_TYPED] marker so the model can
@@ -693,9 +796,13 @@ function BubblePanel(p: PanelProps) {
         )}
 
         {p.stage === "chat" && (
-          <motion.div key="chat" className="flex flex-1 flex-col overflow-hidden bg-[#fafafa]">
-            <div ref={p.scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-              <div className="space-y-3">
+          <motion.div
+            key="chat"
+            dir={p.voiceLang === "ar" || p.voiceLang === "darija" ? "rtl" : "ltr"}
+            className="flex flex-1 flex-col overflow-hidden bg-[#fafafa]"
+          >
+            <div ref={p.scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
+              <div className="min-w-0 space-y-3">
                 {p.messages.map((m, i) => {
                   if (m.kind === "image_card") {
                     return <ImageCardMsg key={i} payload={m.payload} accent={p.accent} locale={p.voiceLang} />;
@@ -714,6 +821,7 @@ function BubblePanel(p: PanelProps) {
                         city={m.payload.city}
                         accent={p.accent}
                         locale={p.voiceLang}
+                        onSelect={p.sendShowroomChoice}
                       />
                     );
                   }
@@ -724,6 +832,7 @@ function BubblePanel(p: PanelProps) {
                       streaming={p.isStreaming && i === p.messages.length - 1}
                       accent={p.accent}
                       brandName={p.brand.name}
+                      locale={p.voiceLang}
                     />
                   );
                 })}
@@ -753,6 +862,7 @@ function BubblePanel(p: PanelProps) {
                   <VinScanButtons
                     accent={p.accent}
                     locale={p.voiceLang}
+                    theme="light"
                     onConfirm={(vin) => {
                       p.setInput(vin);
                       // Defer handleSend by a tick so the controlled textarea
@@ -764,14 +874,21 @@ function BubblePanel(p: PanelProps) {
               )}
               <div className="flex items-end gap-1.5 rounded-2xl border border-black/[0.08] bg-[#fafafa] p-1.5 transition focus-within:border-black/20 focus-within:shadow-[0_0_0_4px_rgba(0,0,0,0.04)]">
                 <textarea
+                  ref={chatInputRef}
                   value={p.input}
                   onChange={(e) => p.setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); p.handleSend(); } }}
                   placeholder={inputPlaceholder(p.voiceLang)}
                   rows={1}
                   disabled={p.isStreaming}
-                  className="block max-h-[96px] min-h-[36px] flex-1 resize-none overflow-y-auto bg-transparent px-2.5 py-2 text-[13px] leading-snug text-[#0c0c10] outline-none placeholder:text-black/30 disabled:opacity-40"
-                  style={{ fieldSizing: "content" } as React.CSSProperties}
+                  autoFocus
+                  // focus-visible:outline-none is required to suppress the
+                  // global :focus-visible outline defined in app/globals.css
+                  // (Citroën red #D22030). Without this override, the
+                  // programmatic focus from autoFocus / our re-focus effect
+                  // paints a red ring around the chat input.
+                  className="block max-h-[96px] min-h-[36px] flex-1 resize-none overflow-y-auto bg-transparent px-2.5 py-2 text-[13px] leading-snug text-[#0c0c10] outline-none focus:outline-none focus-visible:outline-none placeholder:text-black/30 disabled:opacity-40"
+                  style={{ fieldSizing: "content", outline: "none" } as React.CSSProperties}
                 />
                 <motion.button
                   type="button"
@@ -920,10 +1037,40 @@ function detectTypeRequest(
   lang: VoiceLang | null
 ): { snippet: string; placeholder?: string; kind?: "vin" | "email" | "phone" | "name" } | null {
   const lower = chunk.toLowerCase();
+  // RECAP SUPPRESSION — when the agent is reading the collected fields BACK
+  // to the customer for confirmation, it quotes the VIN / email / phone /
+  // name. Without this guard, every recap re-fires keyboard detection (VIN
+  // gets quoted → typeRequest=vin → VinScanButtons remount mid-recap →
+  // confusing). Two signals: explicit recap marker words, OR a "value
+  // pattern" right after a trigger keyword (long alphanumeric for VIN,
+  // an @ for email, a long digit run for phone).
+  const recapMarkers = [
+    /\b(r[ée]capituler|r[ée]capitulatif|r[ée]sumer|r[ée]sumons|pour r[ée]sumer)\b/i,
+    /\b(to recap|to summari[sz]e|let me confirm|to confirm)\b/i,
+    /(ل?ت?لخيص|باش\s*نلخصو|سنلخص|الملخص|نراجع)/,
+  ];
+  if (recapMarkers.some((re) => re.test(chunk))) {
+    return null;
+  }
+  // Trigger word immediately followed by a value (recap-style quotation).
+  // Examples we want to skip:
+  //   "VIN W00HPXWPJH1Y38363"        → 17 alphanumeric value after VIN
+  //   "e-mail younes@gmail.com"      → "@" after e-mail
+  //   "numéro 0678549382"            → 7+ digits after numéro
+  //   "الشاسيه W00HPX..."             → alphanumeric value after الشاسيه
+  const recapValuePatterns = [
+    /\b(vin|ch[aâ]ssis|chassis|الشاسيه|الشاسي|الشاصي|شاسيه|شاسي|شاصي|الهيكل)\b[\s:،,]*[A-Z0-9]{6,}/i,
+    /\b(e-?mail|courriel|الإيميل|إيميلك|بريدك)\b[^@]{0,40}@/i,
+    /\b(num[ée]ro|t[ée]l[ée]phone|portable|mobile|whatsapp|الهاتف|الجوال|الواتساب|نمرتك|نيمرو)\b[\s:،,]*[+\d][\d\s.-]{6,}/i,
+  ];
+  if (recapValuePatterns.some((re) => re.test(chunk))) {
+    return null;
+  }
   // VIN / chassis triggers — highest priority, since voice dictation of a 17-char
   // alphanumeric run is unreliable. Pop the keyboard so the customer can type
   // it accurately. Fires on any mention of "châssis", "VIN", or "chassis number"
-  // in FR / AR / Darija / EN.
+  // in FR / AR / Darija / EN — but only when it's an ASK, not a recap quote
+  // (already filtered above).
   const vinMatchers = [
     /\b(vin|ch[aâ]ssis|chassis)\b/i,
     /num[ée]ro\s+de\s+ch[aâ]ssis/i,
@@ -960,8 +1107,9 @@ function detectTypeRequest(
   ];
   const phoneLoose = [
     /\b(num[ée]ro\s+(?:de\s+)?(?:t[ée]l[ée]phone|portable|mobile|whatsapp)|t[ée]l[ée]phone\s+mobile)\b/i,
-    /\b(phone\s+number|mobile\s+number|whatsapp\s+number)\b/i,
-    /(رقم\s*(?:الهاتف|الجوال|الموبايل|الواتساب|الفون)|نمرتك|نمرة\s*الهاتف|نيمرو\s*ديالك)/,
+    /\bvotre\s+num[ée]ro\b/i, // bare "votre numéro" — the agent often drops the trailing "de mobile"
+    /\b(phone\s+number|mobile\s+number|whatsapp\s+number|your\s+number)\b/i,
+    /(رقم\s*(?:الهاتف|الجوال|الموبايل|الواتساب|الفون)|نمرتك|نمرة\s*الهاتف|نيمرو\s*ديالك|الرقم\s*ديالك|رقمك)/,
   ];
   for (const re of [...phoneStrict, ...phoneLoose]) {
     if (re.test(chunk)) {
@@ -1043,22 +1191,49 @@ function renderInline(text: string, keyPrefix = ""): React.ReactNode {
 }
 
 function wrapDigits(text: string, keyPrefix = ""): React.ReactNode {
-  const re = /(\+?\d[\d\s-]{6,}\d)/g;
+  // Two patterns matched in sequence so prices, phone numbers, VINs and
+  // dates all stay LTR-ordered inside an Arabic / Darija paragraph :
+  //   1. Multi-segment digit runs separated by space / dash — phones,
+  //      prices like "294 000", "35 000 MAD", "+212 678 43 75 48", or
+  //      ISO dates "2026-05-14". Requires 4+ characters total so single
+  //      tokens like "14" or "11h" aren't wrapped unnecessarily.
+  //   2. VIN-shaped 17-char alphanumerics (no I/O/Q) — chassis numbers
+  //      need explicit LTR-isolation otherwise they get reversed when
+  //      embedded in an RTL clause.
+  const patterns: RegExp[] = [
+    /(\+?\d[\d\s-]{2,}\d)/g,
+    /\b([A-HJ-NPR-Z0-9]{17})\b/g,
+  ];
+  type Span = { start: number; end: number; text: string };
+  const spans: Span[] = [];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      spans.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+    }
+  }
+  if (spans.length === 0) return text;
+  // De-overlap : sort by start, drop any that overlap an earlier one.
+  spans.sort((a, b) => a.start - b.start);
+  const merged: Span[] = [];
+  for (const s of spans) {
+    const last = merged[merged.length - 1];
+    if (!last || s.start >= last.end) merged.push(s);
+  }
   const parts: React.ReactNode[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
+  let cursor = 0;
   let key = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
+  for (const s of merged) {
+    if (s.start > cursor) parts.push(text.slice(cursor, s.start));
     parts.push(
       <bdi key={`${keyPrefix}${key++}`} dir="ltr" className="font-mono tabular-nums">
-        {m[0]}
+        {s.text}
       </bdi>
     );
-    last = m.index + m[0].length;
+    cursor = s.end;
   }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts.length === 0 ? text : parts;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
 }
 
 /** Render an assistant chat message with minimal markdown:
@@ -1131,12 +1306,23 @@ function TextMsg({
   streaming,
   accent,
   brandName,
+  locale,
 }: {
   m: Extract<Msg, { kind: "text" }>;
   streaming: boolean;
   accent: string;
   brandName: string;
+  locale: VoiceLang | null;
 }) {
+  // Arabic + Darija sessions need explicit RTL on bubble content. Without it,
+  // messages that start with a Latin token ("Jeep Maroc. السلام…") get
+  // browser-detected as LTR and the Arabic punctuation lands on the wrong
+  // side. dir="rtl" forces the right reading order; embedded Latin / digits
+  // stay readable via the <bdi dir="ltr"> wrappers in renderRichText.
+  const isRtl = locale === "ar" || locale === "darija";
+  const dir = isRtl ? "rtl" : "ltr";
+  const textAlign = isRtl ? "text-right" : "text-left";
+
   if (m.role === "assistant") {
     return (
       <motion.div
@@ -1149,7 +1335,10 @@ function TextMsg({
           <Image src="/brand/rihla-avatar.jpg" alt="" fill sizes="28px" className="object-cover" />
         </div>
         <div className="min-w-0 max-w-[82%]">
-          <div className="rounded-2xl rounded-bl-md bg-white px-3.5 py-2.5 text-[13px] leading-relaxed text-[#0c0c10] shadow-[0_1px_2px_rgba(0,0,0,0.05),0_0_0_1px_rgba(0,0,0,0.04)]">
+          <div
+            dir={dir}
+            className={`rounded-2xl rounded-bl-md bg-white px-3.5 py-2.5 text-[13px] leading-relaxed text-[#0c0c10] shadow-[0_1px_2px_rgba(0,0,0,0.05),0_0_0_1px_rgba(0,0,0,0.04)] ${textAlign}`}
+          >
             {m.text ? renderRichText(m.text) : streaming ? <TypingDots /> : ""}
           </div>
           {m.tools && m.tools.length > 0 && (
@@ -1179,7 +1368,8 @@ function TextMsg({
       className="flex justify-end"
     >
       <div
-        className="max-w-[82%] rounded-2xl rounded-br-md px-3.5 py-2.5 text-[13px] leading-relaxed text-white shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
+        dir={dir}
+        className={`max-w-[82%] rounded-2xl rounded-br-md px-3.5 py-2.5 text-[13px] leading-relaxed text-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] ${textAlign}`}
         style={{ background: accent }}
       >
         {renderWithLtrDigits(m.text)}

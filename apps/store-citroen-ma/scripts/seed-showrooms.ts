@@ -53,27 +53,32 @@ const DATA: Record<string, Showroom[]> = {
     { name: "Citroën Nador", city: "Nador", address: "Bd. Hassan II, Nador", phone: "+212 536 60 22 14", hours: "Mon–Sat · 9am–6:30pm" },
   ],
 
+  // Jeep Maroc — 11 maisons sur 8 villes. Source autoritative : RÉSEAU DES MAISONS
+  // block in apps/store-citroen-ma/app/api/rihla/system-prompt/route.ts (les deux
+  // doivent rester synchronisés sinon la voix et le chat divergent).
+  // Cities NOT covered by Jeep: Beni Mellal, Khouribga, Larache, Settat, Tétouan,
+  // Berkane, Meknès, Nador, Safi, El Jadida, Errachidia, Dakhla, Bouskoura,
+  // Berrechid, Mohammedia. Do NOT seed those.
   "jeep-ma": [
-    // Casablanca
-    { name: "Jeep Casablanca Anfa", city: "Casablanca", address: "Bd. Anfa, Casablanca", phone: "+212 522 39 50 22", whatsapp: "+212 662 11 22 33", email: "casa@jeep.ma", hours: "Mon–Sat · 9am–7pm", primary_dealer: true, service_centre: true },
-    { name: "Jeep Casablanca Ain Sebaâ", city: "Casablanca", address: "Route de Rabat, Ain Sebaâ, Casablanca", phone: "+212 522 35 60 78", whatsapp: "+212 662 14 25 36", hours: "Mon–Sat · 9am–6:30pm", service_centre: true },
+    // Agadir
+    { name: "Jeep Agadir — Fenie Brossette", city: "Agadir", address: "Tassila Rp. 40 Dchira El Jihadia, Agadir", phone: "+212 528 32 25 82", hours: "Mon–Sat · 9am–6:30pm", primary_dealer: true, service_centre: true },
+    // Casablanca (3 maisons)
+    { name: "Jeep Casablanca Bernoussi — Autohall", city: "Casablanca", address: "Km 12, Autoroute Casa-Rabat, Sortie Al Qods, Casablanca", phone: "+212 522 76 13 96", hours: "Mon–Sat · 9am–7pm", service_centre: true },
+    { name: "Jeep Casablanca Bouskoura — Italcar Motorvillage", city: "Casablanca", address: "Ouled Benameur, RP 3011, Km 6, Bouskoura, sortie Ville Verte, Casablanca", phone: "+212 522 01 70 00", whatsapp: "+212 667 77 66 54", hours: "Mon–Sat · 9am–7pm", primary_dealer: true, service_centre: true },
+    { name: "Jeep Casablanca Maârif — Italcar Motorvillage", city: "Casablanca", address: "Angle Bd Brahim Roudani, Bd Zerktouni et Rue Zurich, Maârif, Casablanca", phone: "+212 522 25 48 99", hours: "Mon–Sat · 9am–7pm", service_centre: true },
+    // Fès
+    { name: "Jeep Fès — Auto Hall", city: "Fès", address: "Rue de Libye, Fès", phone: "+212 535 62 59 51", hours: "Mon–Sat · 9am–6:30pm", primary_dealer: true, service_centre: true },
+    // Kénitra
+    { name: "Jeep Kénitra — Auto Hall", city: "Kenitra", address: "383 Boulevard Mohammed V, Kénitra", phone: "+212 537 37 99 66", hours: "Mon–Sat · 9am–6:30pm", service_centre: true },
+    // Marrakech (2 maisons)
+    { name: "Jeep Marrakech Centre Ville — Auto Hall", city: "Marrakech", address: "Km 13, Route de Casablanca, Marrakech 13000", phone: "+212 524 35 47 96", hours: "Mon–Sat · 9am–6:30pm", primary_dealer: true, service_centre: true },
+    { name: "Jeep Marrakech Route de Casablanca — Maniss Auto", city: "Marrakech", address: "Route de Casablanca, Lieu-dit Jnane Sidi Abbad, Marrakech 40000", phone: "+212 524 30 91 01", hours: "Mon–Sat · 9am–6:30pm", service_centre: true },
+    // Oujda
+    { name: "Jeep Oujda — Auto Hall", city: "Oujda", address: "Km 6, Route d'Ahfir, Technopole, Oujda", phone: "+212 536 52 40 20", email: "autohall.oujda2@autohall.ma", hours: "Mon–Sat · 9am–6:30pm", service_centre: true },
     // Rabat
-    { name: "Jeep Rabat Hay Riad", city: "Rabat", address: "Av. Annakhil, Hay Riad, Rabat", phone: "+212 537 65 90 14", whatsapp: "+212 662 22 33 44", email: "rabat@jeep.ma", hours: "Mon–Sat · 9am–7pm", primary_dealer: true },
-    { name: "Jeep Rabat Souissi", city: "Rabat", address: "Av. Mehdi Ben Barka, Souissi, Rabat", phone: "+212 537 67 22 88", hours: "Mon–Sat · 9am–6:30pm" },
-    // Marrakech
-    { name: "Jeep Marrakech Sidi Ghanem", city: "Marrakech", address: "Zone Industrielle Sidi Ghanem, Marrakech", phone: "+212 524 42 88 33", whatsapp: "+212 662 33 44 55", email: "marrakech@jeep.ma", hours: "Mon–Sat · 9am–6:30pm", primary_dealer: true, service_centre: true },
-    // North
-    { name: "Jeep Tanger", city: "Tanger", address: "Av. Mohammed VI, Tanger", phone: "+212 539 34 70 18", whatsapp: "+212 662 44 55 66", email: "tanger@jeep.ma", hours: "Mon–Sat · 9am–6:30pm", service_centre: true },
-    { name: "Jeep Tétouan", city: "Tétouan", address: "Av. des FAR, Tétouan", phone: "+212 539 70 22 14", hours: "Mon–Sat · 9am–6:30pm" },
-    // South / coastal
-    { name: "Jeep Agadir", city: "Agadir", address: "Bd. Mohammed V, Agadir", phone: "+212 528 84 60 22", whatsapp: "+212 662 55 66 77", hours: "Mon–Sat · 9am–6:30pm" },
-    { name: "Jeep El Jadida", city: "El Jadida", address: "Av. Hassan II, El Jadida", phone: "+212 523 35 80 22", hours: "Mon–Sat · 9am–6:30pm" },
-    // Centre / East
-    { name: "Jeep Fès", city: "Fès", address: "Route de Sefrou, Fès", phone: "+212 535 65 22 80", whatsapp: "+212 662 66 77 88", hours: "Mon–Sat · 9am–6:30pm", service_centre: true },
-    { name: "Jeep Meknès", city: "Meknès", address: "Av. des FAR, Meknès", phone: "+212 535 52 70 14", hours: "Mon–Sat · 9am–6:30pm" },
-    { name: "Jeep Oujda", city: "Oujda", address: "Bd. Mohammed V, Oujda", phone: "+212 536 70 88 22", hours: "Mon–Sat · 9am–6:30pm" },
-    { name: "Jeep Kenitra", city: "Kenitra", address: "Route de Tanger, Kenitra", phone: "+212 537 36 22 90", hours: "Mon–Sat · 9am–6:30pm" },
-    { name: "Jeep Mohammedia", city: "Mohammedia", address: "Bd. Hassan II, Mohammedia", phone: "+212 523 30 70 22", hours: "Mon–Sat · 9am–6:30pm" },
+    { name: "Jeep Rabat — Orbis Automotive", city: "Rabat", address: "32 Avenue Hassan II, Lotissement Vita, Rabat", phone: "+212 537 28 35 50", email: "commercial@orbisautomotive.ma", hours: "Mon–Sat · 9am–7pm", primary_dealer: true, service_centre: true },
+    // Tanger
+    { name: "Jeep Tanger — Orbis Automotive", city: "Tanger", address: "Avenue des FAR, Route de Rabat, Tanger", phone: "+212 539 42 47 66", email: "commercial@orbisautomotive.ma", hours: "Mon–Sat · 9am–6:30pm", service_centre: true },
   ],
 
   "peugeot-ksa": [
