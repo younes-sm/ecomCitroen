@@ -4,7 +4,7 @@
 import { NextRequest } from "next/server";
 import { buildSystemPrompt, type BrandContext, type Locale } from "@citroen-store/rihla-agent";
 import { getBrandContext, toAgentContext } from "@/lib/brand-context";
-import { buildJeepApvOverride } from "@/lib/jeep-apv-prompt";
+import { composeJeepPrompt } from "@/lib/jeep-prompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,19 +33,40 @@ function mapLocale(l: string | null, market: string): Locale {
   return "fr-MA";
 }
 
-// Short greetings keep the call interactive — the model finishes speaking in
-// ~2s instead of ~5s, so the user can talk back faster.
-// PRINCIPLE: a warm one-line introduction, then SILENCE. No closing question
-// (asking "how can I help" before the customer has spoken puts the burden on
-// them; clients have flagged this as robotic). Let them volunteer the reason
-// they called — that's the most informative first turn we can possibly get.
+// Welcome message — three short paragraphs: greet, list scope, invite. Lists
+// the agent's scope so the customer knows what to ask. Ends with a direct
+// "how can I help" so the customer feels invited to speak.
 const OPENING_BY_LOCALE: Record<Locale, (brandName: string, agentName: string) => string> = {
-  "fr-MA": (b, a) => `Bonjour, ${a} de ${b}. Je vous écoute.`,
-  "darija-MA": (b, a) => `السلام، أنا ${a} من ${b}. تفضل، كنسمعك.`,
-  "ar-MA": (b, a) => `أهلاً، أنا ${a} من ${b}. تفضّلوا، أنا في خدمتكم.`,
-  "en-MA": (b, a) => `Hi, ${a} here from ${b}. I'm listening.`,
-  "ar-SA": (b, a) => `أهلاً، أنا ${a} من ${b}. تفضّلوا، أنا في خدمتكم.`,
-  "en-SA": (b, a) => `Hi, ${a} here from ${b}. I'm listening.`,
+  "fr-MA": (b) => `Bienvenue chez ${b}.
+
+Je suis votre assistant virtuel, à votre disposition pour tout ce qui touche à l'univers Jeep au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
+
+Comment puis-je vous aider aujourd'hui ?`,
+  "darija-MA": (b) => `مرحبا بيك ف ${b}.
+
+أنا الـ assistant virtuel ديالك، رهن إشارتك ف كل ما يخص عالم Jeep فالمغرب : اكتشاف الـ gamme، essais، configuration، financement، entretien و service après-vente.
+
+كيفاش نقدر نعاونك اليوم ؟`,
+  "ar-MA": (b) => `أهلاً بكم في ${b}.
+
+أنا مساعدكم الافتراضي، في خدمتكم لكل ما يتعلق بعالم Jeep في المغرب : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
+
+كيف يمكنني مساعدتكم اليوم ؟`,
+  "en-MA": (b) => `Welcome to ${b}.
+
+I'm your virtual assistant, here for everything Jeep in Morocco: exploring the range, test drives, configuration, financing, maintenance and after-sales service.
+
+How can I help you today?`,
+  "ar-SA": (b) => `أهلاً بكم في ${b}.
+
+أنا مساعدكم الافتراضي، في خدمتكم لكل ما يتعلق بعالم Jeep : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
+
+كيف يمكنني مساعدتكم اليوم ؟`,
+  "en-SA": (b) => `Welcome to ${b}.
+
+I'm your virtual assistant, here for everything Jeep: exploring the range, test drives, configuration, financing, maintenance and after-sales service.
+
+How can I help you today?`,
 };
 
 const LANG_REMINDER: Record<Locale, string> = {
@@ -72,7 +93,9 @@ export async function GET(req: NextRequest) {
       const ctx = await getBrandContext(brandSlug);
       if (ctx) {
         brand = toAgentContext(ctx);
-        customBody = ctx.activePrompt?.body ?? undefined;
+        // jeep-ma's prompt is the modular composition under `lib/jeep-prompt/`;
+        // ignore any stale Supabase customBody so there's a single source.
+        customBody = brandSlug === "jeep-ma" ? undefined : (ctx.activePrompt?.body ?? undefined);
         voiceName = ctx.brand.voice_name;
       }
     } catch (err) {
@@ -100,7 +123,15 @@ export async function GET(req: NextRequest) {
     year: "numeric",
   });
 
-  const apvOverride = brand.brandSlug === "jeep-ma" ? buildJeepApvOverride({ todayIso, todayHumanFr }) : "";
+  // Voice path: the WebSocket sends the system prompt ONCE at session
+  // start with no history. We can't re-classify intent mid-call, so we
+  // pass mode:"voice" and load ALL flow modules (sales + apv-rdv + apv-
+  // complaint) plus a top-of-prompt intent router that tells the model
+  // how to pick. Without this, an APV customer ("je veux une vidange")
+  // gets walked through the SALES field list with no VIN ask.
+  const apvOverride = brand.brandSlug === "jeep-ma"
+    ? composeJeepPrompt({ todayIso, todayHumanFr, mode: voice ? "voice" : "chat" }).prompt
+    : "";
 
   const voiceSuffix = voice
     ? `

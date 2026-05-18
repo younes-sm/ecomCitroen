@@ -18,7 +18,7 @@ import { validatePhone, normalizePhone } from "@/lib/phone";
 import { validateEmail } from "@/lib/email";
 import { validateVin, normalizeVin } from "@/lib/vin";
 import { validateAppointmentDate, validateServiceDate } from "@/lib/dates";
-import { buildJeepApvOverride } from "@/lib/jeep-apv-prompt";
+import { composeJeepPrompt, classifyIntent } from "@/lib/jeep-prompt";
 import { nextRefNumber } from "@/lib/reference-number";
 import { adminClient } from "@/lib/supabase/admin";
 import { persistAppointment, persistComplaint } from "@/lib/apv-persistence";
@@ -28,6 +28,233 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
+
+type LocaleKey = "fr" | "ar" | "darija" | "en";
+
+/** What we believe has already been collected — derived from the message
+ *  history by `extractFlowState`. Used by the silent-stall recovery to
+ *  figure out which field to ask for next instead of falling back to a
+ *  generic "comment puis-je vous aider ?" line. */
+type FlowState = {
+  firstName?: string;
+  phone?: string;
+  email?: string;
+  vin?: string;
+  city?: string;
+  maison?: string;
+  model?: string;
+  intervention?: "service_rapide" | "mechanical" | "bodywork";
+};
+
+const COVERED_CITY_NORMALISERS: Array<[RegExp, string]> = [
+  [/\b(casa(blanca)?|الدار\s*البيضاء|كازا(بلانكا)?)\b/i, "Casablanca"],
+  [/\b(marrak[ée]ch|marrakesh|مراكش)\b/i, "Marrakech"],
+  [/\b(rabat|الرباط)\b/i, "Rabat"],
+  [/\b(tang[ei]r|tangier|طنجة)\b/i, "Tanger"],
+  [/\b(agadir|أكادير|اكادير|اڭادير)\b/i, "Agadir"],
+  [/\b(f[èe]s|fez|فاس)\b/i, "Fès"],
+  [/\b(k[ée]nitra|kenitra|القنيطرة|قنيطرة)\b/i, "Kénitra"],
+  [/\b(oujda|وجدة)\b/i, "Oujda"],
+];
+
+function matchCoveredCity(raw: string): string | null {
+  const t = raw.trim().toLowerCase().replace(/[!?.,;]+$/g, "");
+  if (!t) return null;
+  for (const [re, name] of COVERED_CITY_NORMALISERS) if (re.test(t)) return name;
+  return null;
+}
+
+function extractFlowState(messages: ChatMessage[]): FlowState {
+  const state: FlowState = {};
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!;
+    const text = msg.content?.replace(/^\s*\[FIELD_TYPED\]\s*/i, "").trim() ?? "";
+    if (!text) continue;
+
+    if (msg.role === "user") {
+      // [MAISON_SELECTED] marker is canonical maison choice.
+      const maisonMatch = msg.content.match(/^\s*\[MAISON_SELECTED\]\s*(.+)$/i);
+      if (maisonMatch) state.maison = (maisonMatch[1] ?? "").trim();
+
+      // Phone — Moroccan format
+      if (!state.phone) {
+        const compact = text.replace(/[\s.-]/g, "");
+        if (/^(0[67]\d{8}|\+212[67]\d{8})$/.test(compact)) state.phone = compact;
+      }
+
+      // Email
+      if (!state.email) {
+        const m = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+        if (m) state.email = m[0];
+      }
+
+      // VIN — 17 alphanumeric. Stricter check: must look unambiguous.
+      if (!state.vin) {
+        const compact = text.replace(/\s+/g, "");
+        if (/^[a-zA-Z0-9]{17}$/.test(compact) && /[A-Za-z]/.test(compact) && /\d/.test(compact)) {
+          state.vin = compact.toUpperCase();
+        }
+      }
+
+      // City
+      if (!state.city) {
+        const c = matchCoveredCity(text);
+        if (c) state.city = c;
+      }
+
+      // Model — explicit Jeep slug mentions in user text.
+      if (!state.model) {
+        if (/\bavenger\b/i.test(text)) state.model = "avenger";
+        else if (/\bcompass\b/i.test(text)) state.model = "compass";
+        else if (/\bwrangler\b/i.test(text)) state.model = "wrangler";
+        else if (/\bgrand[\s-]cherokee\b/i.test(text)) state.model = "grand-cherokee";
+        else if (/\brenegade\b/i.test(text)) state.model = "renegade";
+      }
+
+      // Intervention type
+      if (!state.intervention) {
+        if (/\b(vidange|r[ée]vision|entretien|service\s+rapide|pneus?|freins?|filtre|10\s*000\s*km|20\s*000\s*km|batterie)\b|زيت|صيانة|بنوات|فرام/i.test(text)) state.intervention = "service_rapide";
+        else if (/\b(panne|voyant|moteur|bo[îi]te|embrayage|fuite|d[ée]marrage|ne\s+d[ée]marre)\b|خسرت|خسرتس|ما\s*خدامش|سكتات/i.test(text)) state.intervention = "mechanical";
+        else if (/\b(accident|choc|rayure|peinture|carrosserie|bosse|pare[-\s]?choc)\b|حادثة|ضربة|خربوش|صباغة/i.test(text)) state.intervention = "bodywork";
+      }
+
+      // First name — accept the reply only if the previous assistant turn
+      // explicitly asked for the name and the reply is a plausible name
+      // token (not an email, not a phone, not a VIN).
+      if (!state.firstName) {
+        let prevAssistant = "";
+        for (let j = i - 1; j >= 0; j--) {
+          if (messages[j]!.role === "assistant") {
+            prevAssistant = messages[j]!.content;
+            break;
+          }
+        }
+        const askedName = /(votre\s+pr[ée]nom|tapez\s+votre\s+pr[ée]nom|[ée]crivez\s+votre\s+pr[ée]nom|your\s+first\s+name|type\s+your\s+(first\s+)?name|اسمكم(\s+الأول)?|اكتبوا\s+اسمكم|كتب\s+السمية|سميتك)/i.test(prevAssistant);
+        const looksLikeName = /^[\p{L}\s'-]{2,40}$/u.test(text) && !/@/.test(text);
+        if (askedName && looksLikeName) state.firstName = text.split(/\s+/)[0]!;
+      }
+    }
+  }
+  return state;
+}
+
+type RecoveryStep =
+  | { kind: "name" | "phone" | "email" | "vin"; requestInput: "name" | "phone" | "email" | "vin"; text: Record<LocaleKey, string> }
+  | { kind: "city"; text: Record<LocaleKey, string> }
+  | { kind: "maison"; city: string; text: Record<LocaleKey, string> }
+  | { kind: "date" | "slot"; text: Record<LocaleKey, string> };
+
+function nextRecoveryStep(state: FlowState, isApv: boolean): RecoveryStep | null {
+  const name = state.firstName ?? "";
+  const nameSuffix = name ? `, ${name.charAt(0).toUpperCase()}${name.slice(1).toLowerCase()}` : "";
+
+  if (!state.firstName) {
+    return {
+      kind: "name",
+      requestInput: "name",
+      text: {
+        fr: "Tapez votre prénom pour ouvrir votre dossier.",
+        ar: "اكتبوا اسمكم الأول لفتح ملفكم.",
+        darija: "كتب السمية ديالك باش نسجل الملف.",
+        en: "Type your first name to open your file.",
+      },
+    };
+  }
+
+  if (!state.phone) {
+    return {
+      kind: "phone",
+      requestInput: "phone",
+      text: {
+        fr: `Enchanté${nameSuffix}. Tapez votre numéro de mobile pour qu'on vous rappelle.`,
+        ar: `تشرفت بكم${nameSuffix}. اكتبوا رقم هاتفكم لكي نتمكن من معاودة الاتصال بكم.`,
+        darija: `متشرف${nameSuffix}. كتب نمرة الهاتف ديالك باش نعاودو ليك.`,
+        en: `Pleasure${nameSuffix}. Type your mobile number so we can call you back.`,
+      },
+    };
+  }
+
+  if (!state.email) {
+    return {
+      kind: "email",
+      requestInput: "email",
+      text: {
+        fr: "Merci. Tapez votre adresse e-mail pour qu'on vous envoie la confirmation par écrit.",
+        ar: "شكرًا. اكتبوا بريدكم الإلكتروني لإرسال التأكيد كتابيًا.",
+        darija: "شكرا. كتب الإيميل ديالك باش نصيفطو ليك التأكيد.",
+        en: "Thanks. Type your email address so we can send you the confirmation.",
+      },
+    };
+  }
+
+  if (isApv && !state.vin) {
+    return {
+      kind: "vin",
+      requestInput: "vin",
+      text: {
+        fr: "Le plus simple — prenez votre carte grise en photo, je récupère le châssis automatiquement. Ou tapez les 17 caractères à la main.",
+        ar: "الأسهل — التقطوا صورة لـ carte grise ديالكم وسأقرأ رقم الشاسيه تلقائيًا. أو اكتبوا الـ 17 حرفًا يدويًا.",
+        darija: "الأحسن صوّر carte grise ديالك و أنا غادي نقرا 17 حرف وحدي. ولا كتبهم بلْيد.",
+        en: "The easiest way — snap a photo of your carte grise and I'll read the VIN automatically. Or type the 17 characters by hand.",
+      },
+    };
+  }
+
+  if (!state.city) {
+    return {
+      kind: "city",
+      text: isApv
+        ? {
+            fr: "Très bien. Dans quelle ville préférez-vous votre rendez-vous ?",
+            ar: "ممتاز. في أي مدينة تفضّلون رنديڤو ؟",
+            darija: "مزيان. ف أي ville تفضل تجي ل la maison ؟",
+            en: "Great. Which city would you like the appointment in?",
+          }
+        : {
+            fr: "Très bien. Dans quelle ville préférez-vous l'essai routier ?",
+            ar: "ممتاز. في أي مدينة تفضّلون القيام بتجربة القيادة ؟",
+            darija: "مزيان. ف أي ville تفضل تجي ل la maison ؟",
+            en: "Great. Which city would you like the test drive in?",
+          },
+    };
+  }
+
+  if (!state.maison) {
+    const c = state.city;
+    return {
+      kind: "maison",
+      city: c,
+      text: {
+        fr: `Voici les maisons à ${c}. Laquelle vous arrange ?`,
+        ar: `إليكم la maison Jeep في ${c}. أي واحدة تناسبكم ؟`,
+        darija: `هاو la maison Jeep ف ${c}. شمن واحدة تناسبك ؟`,
+        en: `Here are the maisons in ${c}. Which one works for you?`,
+      },
+    };
+  }
+
+  if (isApv) {
+    return {
+      kind: "date",
+      text: {
+        fr: "Parfait. Quelle date vous arrangerait pour passer ?",
+        ar: "ممتاز. أي يوم يناسبكم للمرور ؟",
+        darija: "مزيان. شمن نهار يناسبك تجي ؟",
+        en: "Great. What day works best for you to come in?",
+      },
+    };
+  }
+
+  return {
+    kind: "slot",
+    text: {
+      fr: "Samedi matin ou un soir en semaine ?",
+      ar: "يوم السبت صباحًا أم مساءً في الأسبوع ؟",
+      darija: "السبت صباحًا ولا شي مساء ف الأسبوع ؟",
+      en: "Saturday morning or a weekday evening?",
+    },
+  };
+}
 
 /** Compact memory of side-effects already produced THIS session — fed back
  *  into the system prompt so the model knows what's on screen and what
@@ -623,7 +850,9 @@ export async function POST(req: NextRequest) {
       const ctx = await getBrandContext(body.brandSlug);
       if (ctx) {
         brand = toAgentContext(ctx);
-        customBody = ctx.activePrompt?.body ?? undefined;
+        // jeep-ma's prompt is the modular composition under `lib/jeep-prompt/`;
+        // ignore any stale Supabase customBody so there's a single source.
+        customBody = body.brandSlug === "jeep-ma" ? undefined : (ctx.activePrompt?.body ?? undefined);
       }
     } catch (err) {
       console.warn("[chat] failed to load brand context, using fallback:", (err as Error).message);
@@ -640,18 +869,13 @@ export async function POST(req: NextRequest) {
     returningUser: body.returningUser,
     sessionSummary: body.sessionSummary,
   });
-  // APV (Jeep) — the chat prompt now uses the SAME apvOverride function as the
-  // voice route (lib/jeep-apv-prompt.ts). Previously this route had its own
-  // copy with a lookup_vin / "VIN PREFILL" flow that diverged badly from the
-  // voice prompt (no CNDP gates, wrong service-type wording, agent saying
-  // "Je n'arrive pas à retrouver votre dossier"). Single source of truth now.
-  const apvEnabled = brand.brandSlug === "jeep-ma";
-  if (!apvEnabled && body.brandSlug === "jeep-ma") {
-    console.warn(`[chat] APV expected for jeep-ma but brand context resolved to ${brand.brandSlug} (Supabase miss?).`);
+  // Jeep prompt — composed per-turn from modular pieces, routed by intent
+  // classifier on the message history. Discovery turns load ~6k tokens,
+  // narrowing to ~7-8k once the customer commits to a flow.
+  const jeepEnabled = brand.brandSlug === "jeep-ma";
+  if (!jeepEnabled && body.brandSlug === "jeep-ma") {
+    console.warn(`[chat] Jeep prompt expected for jeep-ma but brand context resolved to ${brand.brandSlug} (Supabase miss?).`);
   }
-  // Inject today's date so the model has a stable reference for relative
-  // dates ("demain", "lundi prochain", "غدا") — same anchor the voice prompt
-  // uses to avoid year hallucinations like "y009-05-31".
   const todayIso = new Date().toISOString().slice(0, 10);
   const todayHumanFr = new Date().toLocaleDateString("fr-MA", {
     weekday: "long",
@@ -660,8 +884,15 @@ export async function POST(req: NextRequest) {
     year: "numeric",
   });
 
-  const apvOverride = apvEnabled ? buildJeepApvOverride({ todayIso, todayHumanFr }) : "";
-  const systemPrompt = baseSystem + buildPromptSuffix(body.pageContext, !!body.voice) + buildSessionMemoryBlock(body.sessionContext) + apvOverride;
+  const jeepOverride = jeepEnabled
+    ? composeJeepPrompt({
+        todayIso,
+        todayHumanFr,
+        history: body.messages,
+        mode: body.voice ? "voice" : "chat",
+      }).prompt
+    : "";
+  const systemPrompt = baseSystem + buildPromptSuffix(body.pageContext, !!body.voice) + buildSessionMemoryBlock(body.sessionContext) + jeepOverride;
 
   const geminiKey = process.env.GOOGLE_API_KEY;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
@@ -821,7 +1052,7 @@ export async function POST(req: NextRequest) {
         // Tools persisted here are tracked (in the outer-scope
         // inlinePersistedToolIdx) so the post-stream fire-and-forget block at
         // the bottom of this route doesn't double-persist them.
-        if (apvEnabled && body.brandSlug) {
+        if (jeepEnabled && body.brandSlug) {
           for (let idx = 0; idx < collectedTools.length; idx += 1) {
             const t = collectedTools[idx]!;
             if (t.name === "book_service_appointment") {
@@ -974,6 +1205,104 @@ export async function POST(req: NextRequest) {
           stallHandled = true;
         }
 
+        // ── Silent-stall recovery (state-driven) ───────────────────────
+        // Earlier versions had 5 pattern branches (after-essai-yes,
+        // after-name, after-phone, after-email-sales, after-email-apv,
+        // after-city). Each added covered one more failure mode and missed
+        // adjacent ones (phone-confirmation "c'est bien ça ?" + "oui",
+        // intent-aware after-email, etc.). Rather than keep patching, we
+        // extract the conversation state ONCE, figure out what's already
+        // collected, and advance to the next missing field.
+        //
+        // The recovery only fires when we have evidence the customer is
+        // already in a data-collection flow — at least one identity field
+        // collected, or the last assistant turn asked for an identity
+        // field, or the customer just said yes to an essai/visite offer,
+        // or the user's own message contains an essai/test-drive trigger.
+        // Otherwise we fall through to the generic discovery fallback.
+        const lastAssistantText = lastAssistantMsg?.content ?? "";
+        const lastAssistantAskedIdentityField = /(votre\s+pr[ée]nom|votre\s+num[ée]ro|adresse\s+e[-\s]?mail|votre\s+e[-\s]?mail|ch[âa]ssis|carte\s+grise|VIN|your\s+first\s+name|your\s+(mobile\s+)?(phone\s+)?number|your\s+e[-\s]?mail|اسمكم|سميتك|نمرتك|رقم\s+هاتفكم|الإيميل|بريدكم|الشاسي|carte\s*grise|c['']?est\s+bien\s+[çc]a|correct\s*\?)/i.test(lastAssistantText);
+        const lastAssistantOfferedEssai = /(essai(\s+routier|\s+sur\s+route)?|test\s*drive|venir\s+(l['e]\s*)?essayer|venir\s+(la|le)\s+voir|visite(r)?|visit\b|rendez-vous|تجربة(\s*قيادة)?|تجي\s+تجربها|تجي\s+ل\s*la\s+maison|زيارة|rendez-?vous)/i.test(lastAssistantText);
+        // User explicitly asks for an essai / test drive / visite / RDV —
+        // tolerant of typos ("je vis un essai", "je veu un essai") because
+        // the word "essai" alone is the strong signal. Reuses the
+        // `userText` already extracted above for the affirmative check.
+        const userAskedForEssai = /\b(essai|test\s*drive|essayer|tester|visite(r)?|visit\b|rendez-?vous|réserve|reserve)\b|تجربة|نحجز|نجرب|تجرب|visit\s+the\s+showroom|book\s+a\s+test/i.test(userText);
+        const silentStall = !stallHandled && !emittedText && !emittedVisibleTool && !isStalledBooking;
+
+        if (silentStall) {
+          const intent = classifyIntent(body.messages);
+          const state = extractFlowState(body.messages);
+          const isApv = intent === "apv-rdv" || intent === "apv-complaint";
+          const hasAnyIdentity = !!(state.firstName || state.phone || state.email || state.vin);
+          const gatedByYesToOffer = userSaidYes && lastAssistantOfferedEssai;
+
+          // Only fire state-driven recovery when we're past discovery.
+          // Otherwise leave it to the generic fallback so the agent can
+          // re-engage on the customer's actual question.
+          if (hasAnyIdentity || lastAssistantAskedIdentityField || gatedByYesToOffer || userAskedForEssai) {
+            const next = nextRecoveryStep(state, isApv);
+            if (next) {
+              const text = next.text[localeKey];
+              console.warn(
+                `[rihla/chat] silent stall — state-driven recovery (locale=${localeKey}, intent=${intent}, kind=${next.kind}, state=${JSON.stringify(state)})`
+              );
+              emit(controller, encoder, { type: "text", text });
+              collectedText.push(text);
+              if (next.kind === "name" || next.kind === "phone" || next.kind === "email" || next.kind === "vin") {
+                emit(controller, encoder, { type: "tool", name: "request_input", input: { field: next.requestInput } });
+              } else if (next.kind === "maison") {
+                emit(controller, encoder, { type: "tool", name: "find_showrooms", input: { city: next.city } });
+              }
+              stallHandled = true;
+            }
+          }
+        }
+
+        // Pattern (1.10) : show_model_image fired but no CTA in the
+        // accompanying text. The model either went mute after the image,
+        // OR produced a recommendation paragraph that ends on a fact
+        // ("...parfait pour la ville.") with no question pushing for the
+        // next step. Both shapes feel like a quote sheet, not a sales
+        // conversation. Inject a one-line CTA proposing an essai routier
+        // or a visite when the model's text didn't.
+        const shownImageThisTurn = collectedTools.find((t) => t.name === "show_model_image");
+        if (!stallHandled && shownImageThisTurn) {
+          const textHasCta = /\?/.test(emittedText) || /\b(essai|test\s*drive|visite|visit\b|rendez-?vous|essayer)\b|تجربة|essai\s+routier|نحجز/i.test(emittedText);
+          if (!textHasCta) {
+            const shownSlug = String(shownImageThisTurn.input?.slug ?? "").toLowerCase();
+            const modelLabel =
+              shownSlug === "avenger" ? "Avenger"
+              : shownSlug === "compass" ? "Compass"
+              : shownSlug === "wrangler" ? "Wrangler"
+              : shownSlug === "grand-cherokee" ? "Grand Cherokee"
+              : shownSlug === "renegade" ? "Renegade"
+              : "ce modèle";
+            // If we already have some text (recommendation paragraph), we
+            // append the CTA AFTER it. If text was empty, we lead with a
+            // short "voici le X" framing first.
+            const continuation = emittedText
+              ? localeKey === "ar"
+                ? `هل ترغبون أن نحجز لكم تجربة قيادة، أم زيارة لـ la maison لرؤيتها على الطبيعة ؟`
+                : localeKey === "darija"
+                ? `واش نحجزو ليك essai routier، ولا تجي ل la maison باش تشوفها ؟`
+                : localeKey === "en"
+                ? `Want me to book you a test drive, or a visit to la maison to see it in person?`
+                : `On vous bloque un essai routier, ou une visite à la maison pour la voir en vrai ?`
+              : localeKey === "ar"
+                ? `إليكم ${modelLabel} الذي يناسب احتياجاتكم. هل ترغبون أن نحجز لكم تجربة قيادة أو زيارة لـ la maison ؟`
+                : localeKey === "darija"
+                ? `هاه ${modelLabel} لي يناسبك. واش نحجزو ليك essai routier ولا تجي ل la maison ؟`
+                : localeKey === "en"
+                ? `Here's the ${modelLabel} that fits your needs. Want me to book you a test drive, or a visit to la maison to see it in person?`
+                : `Voici le ${modelLabel} qui correspond à votre besoin. On vous bloque un essai routier, ou une visite à la maison pour la voir en vrai ?`;
+            console.warn(`[rihla/chat] image-without-cta recovery — injecting CTA (locale=${localeKey}, slug=${shownSlug}, hadText=${!!emittedText})`);
+            emit(controller, encoder, { type: "text", text: continuation });
+            collectedText.push(continuation);
+            stallHandled = true;
+          }
+        }
+
         // Pattern (2) : STALLED BOOKING. Customer said yes to CNDP but the
         // model didn't fire a booking tool. Trigger the forced-tool retry
         // EVEN IF the model already emitted a confirmation-looking text —
@@ -1045,7 +1374,7 @@ export async function POST(req: NextRequest) {
             // can fire any of the 4 booking tools). Skip tools already
             // handled by the inline block above to avoid double-pushing to
             // Salesforce / Supabase.
-            if (apvEnabled && body.brandSlug) {
+            if (jeepEnabled && body.brandSlug) {
               for (let idx = 0; idx < collectedTools.length; idx += 1) {
                 if (inlinePersistedToolIdx.has(idx)) continue;
                 const t = collectedTools[idx]!;

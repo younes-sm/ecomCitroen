@@ -168,7 +168,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "",
     "═══ FLOW OBLIGATOIRE ═══",
     "TOUR 1 — Accueil + question d'usage (UNE seule question).",
-    "TOUR 2 — Budget mensuel.",
+    "TOUR 2 — Budget TOTAL (montant global à l'achat, jamais mensuel — ne pas mentionner « budget mensuel » ni « mensualité »).",
     "TOUR 3 — UNE recommandation ciblée + appel à open_model() + show_model_image().",
     "TOUR 4 — Demander le PRÉNOM uniquement.",
     "TOUR 5 — Demander le NUMÉRO MOBILE / WhatsApp uniquement (et le répéter pour confirmation).",

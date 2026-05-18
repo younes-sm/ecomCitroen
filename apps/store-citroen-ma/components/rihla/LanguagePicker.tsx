@@ -64,14 +64,30 @@ export function getLangConfig(id: VoiceLang) {
 
 /** APV-aware welcomes — used by widgets that ALSO handle after-sales (RDV /
  *  Info / Réclamation), currently jeep-ma only. The default sales-only
- *  greetings live in the LANGS table above. PRINCIPLE: open with a warm
- *  one-line introduction and STOP. Do not list capabilities, do not ask a
- *  question, do not push the customer. Let them say what they came for. */
+ *  greetings live in the LANGS table above. Three-paragraph welcome: greet,
+ *  list scope, invite. Mirrors the server-side OPENING_BY_LOCALE in
+ *  /api/rihla/system-prompt — keep the two in sync. */
 const APV_GREETINGS: Record<VoiceLang, string> = {
-  fr: "Bonjour, je suis NARA, votre conseillère Jeep Maroc. Je vous écoute.",
-  darija: "السلام، أنا نارا، المستشارة ديالك ف Jeep Maroc. تفضل، كنسمعك.",
-  ar: "أهلاً بكم، أنا نارا، مستشارتكم لدى Jeep المغرب. تفضّلوا، أنا في خدمتكم.",
-  en: "Hello, I'm NARA, your Jeep Morocco advisor. I'm listening.",
+  fr: `Bienvenue chez Jeep Maroc.
+
+Je suis votre assistant virtuel, à votre disposition pour tout ce qui touche à l'univers Jeep au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
+
+Comment puis-je vous aider aujourd'hui ?`,
+  darija: `مرحبا بيك ف Jeep Maroc.
+
+أنا الـ assistant virtuel ديالك، رهن إشارتك ف كل ما يخص عالم Jeep فالمغرب : اكتشاف الـ gamme، essais، configuration، financement، entretien و service après-vente.
+
+كيفاش نقدر نعاونك اليوم ؟`,
+  ar: `أهلاً بكم في Jeep Maroc.
+
+أنا مساعدكم الافتراضي، في خدمتكم لكل ما يتعلق بعالم Jeep في المغرب : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
+
+كيف يمكنني مساعدتكم اليوم ؟`,
+  en: `Welcome to Jeep Maroc.
+
+I'm your virtual assistant, here for everything Jeep in Morocco: exploring the range, test drives, configuration, financing, maintenance and after-sales service.
+
+How can I help you today?`,
 };
 
 /** Returns the greeting to use as the chat opener — falls back to the

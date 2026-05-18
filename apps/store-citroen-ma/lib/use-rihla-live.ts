@@ -496,7 +496,15 @@ export function useRihlaLive(
       });
       streamRef.current = stream;
 
-      const ctx = new AudioContext({ sampleRate: 16000 });
+      // Reuse the existing micCtxRef if it's still alive — by the second
+      // reconnect, creating a fresh AudioContext lands it in "suspended"
+      // state, and we can't resume it (no gesture). Reusing the already-
+      // running context from the first session is what keeps mic capture
+      // working across reconnects.
+      const ctx =
+        micCtxRef.current && micCtxRef.current.state !== "closed"
+          ? micCtxRef.current
+          : new AudioContext({ sampleRate: 16000 });
       micCtxRef.current = ctx;
       // Browsers create AudioContexts in "suspended" state when not inside a
       // user gesture. Our connect() runs from a useEffect (auto-start when the
@@ -581,6 +589,29 @@ export function useRihlaLive(
     playQueueRef.current = [];
     userBufferRef.current = "";
     assistantBufferRef.current = "";
+
+    // If the user re-opens the call before the previous session fully tore
+    // down (the WS hasn't fired onclose yet, or the mic stream is still
+    // live), aggressively close them BEFORE we start fresh. This also lets
+    // the stale-ws guard in onclose/onerror identify the old socket as
+    // superseded via the wsRef !== ws check.
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+      try {
+        wsRef.current.close();
+      } catch { /* */ }
+      wsRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    // We deliberately keep micCtxRef alive — it's reused by startMic() to
+    // avoid re-creating an AudioContext that the browser won't let us
+    // resume outside a fresh gesture (see comment in stopMic).
+    try { workletRef.current?.disconnect(); } catch { /* */ }
+    workletRef.current = null;
+    try { sourceRef.current?.disconnect(); } catch { /* */ }
+    sourceRef.current = null;
 
     // Pre-warm + resume the audio context now (we're inside a click handler
     // so browsers will allow it). Doing this here, awaited via the audio
@@ -679,6 +710,13 @@ export function useRihlaLive(
         message: (ev as Event & { message?: string }).message ?? "(no message)",
         durationMs: Date.now() - wsOpenedAt,
       });
+      // Guard: a stale ws (from a previous session) firing onerror after the
+      // user already reopened a new call would otherwise flip the new
+      // session into "error" state. Only react when this ws is still active.
+      if (wsRef.current !== ws) {
+        console.warn("[rihla-live] stale ws.onerror ignored — newer session is active");
+        return;
+      }
       updateState("error");
     };
     ws.onclose = (ev) => {
@@ -691,6 +729,16 @@ export function useRihlaLive(
         wasClean: ev.wasClean,
         durationMs: Date.now() - wsOpenedAt,
       });
+      // Guard: this onclose fires asynchronously. If the user re-opened the
+      // call in the meantime (`connect()` already swapped wsRef to a NEW
+      // socket), running updateState("idle") + stopMic() would kill the
+      // brand-new session's mic — that's the "mic detected then closes
+      // automatically, have to close + reopen widget" bug. Bail when this
+      // close belongs to a superseded session.
+      if (wsRef.current !== ws) {
+        console.warn("[rihla-live] stale ws.onclose ignored — newer session is active");
+        return;
+      }
       updateState("idle");
       stopMic();
     };
@@ -704,12 +752,18 @@ export function useRihlaLive(
     try {
       workletRef.current?.disconnect();
     } catch { /* */ }
-    // Close the input AudioContext so the next session creates a fresh one
-    // in a known state — prevents leaking suspended contexts across sessions.
-    if (micCtxRef.current && micCtxRef.current.state !== "closed") {
-      void micCtxRef.current.close().catch(() => {});
-    }
-    micCtxRef.current = null;
+    workletRef.current = null;
+    try {
+      sourceRef.current?.disconnect();
+    } catch { /* */ }
+    sourceRef.current = null;
+    // Keep micCtxRef ALIVE between sessions. Closing it forced the next
+    // session to create a fresh AudioContext, which the browser then put
+    // in a suspended state because connect() runs from a useEffect — by
+    // the time we try to resume, the user's gesture has been consumed and
+    // resume() silently fails. The mic appeared "live" in the UI but no
+    // audio frames ever reached Gemini. Reusing the running context fixes
+    // the second-reconnect mic dead-air bug.
   }, []);
 
   const disconnect = useCallback(() => {

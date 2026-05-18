@@ -146,52 +146,154 @@ export async function POST(req: NextRequest) {
           (m) => m.role === "assistant" && !!m.text && /(09[-\s]?08|loi\s+09|conformément|stellantis\s+maroc|protection\s+des\s+données|توافقون|الموافقة|data[-\s]protection)/i.test(m.text)
         );
         if (fakeConfirmation && cndpAsked) {
+          // Detect APV vs SALES by scanning the transcript for service /
+          // repair keywords. APV → persistAppointment (book_service_-
+          // appointment). SALES → captureLeadFromBooking (book_test_drive).
+          const transcriptBlob = messages.map((m) => m.text ?? "").join(" ");
+          const isApv = /\b(vidange|r[ée]vision|entretien|service\s+rapide|pneus?|freins?|panne|voyant|moteur|carrosserie|m[ée]canique|rendez-?vous\s+atelier|atelier|réclamation)\b|فيدونج|صيانة|بنوات|فرام|خسرت|كنشكي|service\s+apres/i.test(transcriptBlob);
           console.error(
-            `[voice/diag] STALLED BOOKING DETECTED on end_call. conv=${body.conversationId} — attempting field recovery.`
+            `[voice/diag] STALLED BOOKING DETECTED on end_call. conv=${body.conversationId} — flow=${isApv ? "APV" : "SALES"} — attempting field recovery.`
           );
-          // Heuristic recap parse. Looks for the typical pattern :
-          //   "Younes, pour récapituler : essai du Compass à Italcar Motorvillage Bouskoura, …"
+
+          // Common parsers — apply to both flows.
           const recap =
             messages.find(
-              (m) => m.role === "assistant" && !!m.text && /récapituler|pour\s+résumer|recap/i.test(m.text)
+              (m) => m.role === "assistant" && !!m.text && /récapituler|pour\s+résumer|recap|للتأكيد|للتلخيص/i.test(m.text)
             )?.text ?? "";
-          const firstNameMatch = recap.match(/^\s*([A-ZÉÈÀÔÎÇ][a-zéèàôîç]{1,20})\s*[,،]/);
-          const modelMatch = recap.match(/\b(Avenger|Compass|Wrangler|Grand\s*Cherokee|Renegade)\b/i);
-          const showroomMatch = recap.match(/à\s+((?:Italcar\s+Motorvillage|Autohall|Auto\s+Hall|Orbis\s+Automotive|Fenie\s+Brossette|Maniss\s+Auto)[^,.\n]{0,80})/i);
-          // Phone may be spoken-out ("zéro six zéro neuf…") OR digit-typed.
-          // Look at user messages for a digit run first (they likely typed it).
           const userMessages = messages.filter((m) => m.role === "user" && !!m.text);
+
+          // First name — prefer the typed user message that came right
+          // after the name ask (typed name comes through as a short letter-
+          // only token, e.g. "younes").
+          let firstName: string | undefined;
+          for (let i = 0; i < messages.length; i++) {
+            const a = messages[i];
+            if (a?.role !== "assistant" || !a.text) continue;
+            if (!/(votre\s+pr[ée]nom|tapez\s+votre\s+pr[ée]nom|اسمكم|سميتك|كتب\s+السمية|your\s+first\s+name)/i.test(a.text)) continue;
+            for (let j = i + 1; j < messages.length; j++) {
+              const u = messages[j];
+              if (u?.role !== "user" || !u.text) continue;
+              const t = u.text.trim();
+              if (/^[\p{L}'-]{2,30}$/u.test(t) && !/@/.test(t) && !/^\d/.test(t)) {
+                firstName = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+                break;
+              }
+            }
+            if (firstName) break;
+          }
+          if (!firstName) {
+            const firstNameMatch = recap.match(/[\s,،]([A-ZÉÈÀÔÎÇ][a-zéèàôîç]{1,20})[\s,،.!?]/);
+            if (firstNameMatch?.[1]) firstName = firstNameMatch[1];
+          }
+
           const phoneFromUser =
-            userMessages.map((m) => (m.text ?? "").match(/(\+?\d[\d\s\-.]{7,}\d)/)?.[0])
+            userMessages.map((m) => (m.text ?? "").replace(/[\s.-]/g, "").match(/(0[67]\d{8}|\+212[67]\d{8})/)?.[0])
               .find((p): p is string => !!p) ?? null;
           const emailFromUser =
             userMessages.map((m) => (m.text ?? "").match(/[\w.+-]+@[\w-]+\.[\w.-]+/)?.[0])
               .find((e): e is string => !!e) ?? null;
-          const firstName = firstNameMatch?.[1]?.trim();
-          const modelSlug = modelMatch?.[1]?.toLowerCase().replace(/\s+/g, "-");
-          const showroomName = showroomMatch?.[1]?.trim();
           const phone = phoneFromUser?.trim();
           const email = emailFromUser?.trim();
-          // Need at minimum firstName + phone to file a usable lead.
-          if (firstName && phone) {
-            console.error(
-              `[voice/diag] RECOVERY firing book_test_drive : firstName="${firstName}" phone="${phone}" model="${modelSlug ?? "?"}" showroom="${showroomName ?? "?"}" email="${email ?? "(none)"}"`
-            );
-            const noteParts = ["recovery: stalled-booking-on-end_call"];
-            await captureLeadFromBooking({
-              conversationId: body.conversationId,
-              brandSlug: stallRecoveryBrand,
-              modelSlug: modelSlug ?? "",
-              firstName,
-              phone,
-              email: email ?? undefined,
-              showroomName: showroomName ?? undefined,
-              notes: noteParts.join(" · "),
-            });
+
+          // Model
+          const modelMatch = transcriptBlob.match(/\b(Avenger|Compass|Wrangler|Grand\s*Cherokee|Renegade)\b/i);
+          const modelSlug = modelMatch?.[1]?.toLowerCase().replace(/\s+/g, "-");
+
+          // Maison name — same regex on both flows; recap usually mentions it.
+          const showroomMatch = transcriptBlob.match(/((?:Italcar\s+Motorvillage(?:\s+(?:Bouskoura|Maârif|Maarif))?|Autohall(?:\s+Bernoussi)?|Auto\s+Hall(?:\s+Marrakech)?|Orbis\s+Automotive|Fenie\s+Brossette|Maniss\s+Auto)[^,.\n]{0,40})/i);
+          const showroomName = showroomMatch?.[1]?.trim();
+
+          if (isApv) {
+            // APV-specific fields.
+            // VIN — 17 alphanumeric, prefer the user-typed value over agent echo.
+            let vin: string | undefined;
+            for (const m of userMessages) {
+              const t = (m.text ?? "").replace(/\s+/g, "");
+              if (/^[A-Za-z0-9]{17}$/.test(t)) {
+                vin = t.toUpperCase();
+                break;
+              }
+            }
+
+            // Intervention type
+            let interventionType: "service_rapide" | "mechanical" | "bodywork" = "service_rapide";
+            if (/\b(panne|voyant|moteur|bo[îi]te|embrayage|fuite|d[ée]marrage)\b|خسرت|سكتات|ما\s*خدامش/i.test(transcriptBlob)) interventionType = "mechanical";
+            else if (/\b(accident|choc|rayure|peinture|carrosserie|bosse)\b|حادثة|ضربة|خربوش|صباغة/i.test(transcriptBlob)) interventionType = "bodywork";
+
+            // City
+            let city: string | undefined;
+            if (/\b(casa(blanca)?|الدار\s*البيضاء)\b/i.test(transcriptBlob)) city = "Casablanca";
+            else if (/\bmarrak[ée]ch\b|مراكش/i.test(transcriptBlob)) city = "Marrakech";
+            else if (/\brabat\b|الرباط/i.test(transcriptBlob)) city = "Rabat";
+            else if (/\btang[ei]r\b|طنجة/i.test(transcriptBlob)) city = "Tanger";
+            else if (/\bagadir\b|أكادير/i.test(transcriptBlob)) city = "Agadir";
+            else if (/\bf[èe]s\b|فاس/i.test(transcriptBlob)) city = "Fès";
+            else if (/\bk[ée]nitra\b|القنيطرة|قنيطرة/i.test(transcriptBlob)) city = "Kénitra";
+            else if (/\boujda\b|وجدة/i.test(transcriptBlob)) city = "Oujda";
+
+            // Preferred date — look for ISO in agent recap, or "demain" / weekday.
+            let preferredDate: string | undefined;
+            const isoMatch = transcriptBlob.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+            if (isoMatch) preferredDate = isoMatch[0];
+
+            // Slot
+            const preferredSlot: "morning" | "afternoon" =
+              /(matin|صباح|morning|\b(?:8|9|10|11)\s*h)/i.test(transcriptBlob)
+                ? "morning"
+                : /(après-?midi|بعد\s*الزوال|afternoon|\b(?:1[3-7])\s*h)/i.test(transcriptBlob)
+                ? "afternoon"
+                : "morning";
+
+            // Minimum viable record: firstName + phone + VIN (or attempted VIN).
+            // We file even with an imperfect VIN — the dealer reconciles.
+            if (firstName && phone) {
+              console.error(
+                `[voice/diag] RECOVERY firing book_service_appointment : firstName="${firstName}" phone="${phone}" email="${email ?? "(none)"}" model="${modelSlug ?? "?"}" vin="${vin ?? "(missing)"}" intervention="${interventionType}" city="${city ?? "?"}" date="${preferredDate ?? "?"}" slot="${preferredSlot}" maison="${showroomName ?? "?"}"`
+              );
+              await persistAppointment({
+                brandSlug: stallRecoveryBrand,
+                conversationId: body.conversationId,
+                input: {
+                  fullName: firstName,
+                  phone,
+                  email: email ?? "",
+                  vehicleBrand: "Jeep",
+                  vehicleModel: modelSlug ?? "",
+                  vin: vin ?? "",
+                  interventionType,
+                  city: city ?? "",
+                  preferredDate: preferredDate ?? "",
+                  preferredSlot,
+                  comment: `recovery: stalled-booking-on-end_call · maison=${showroomName ?? "?"}`,
+                  cndpConsent: true,
+                },
+              });
+            } else {
+              console.error(
+                `[voice/diag] STALLED APV BOOKING UNRECOVERABLE — firstName="${firstName ?? "?"}" phone="${phone ?? "?"}" — manual review needed for conv=${body.conversationId}`
+              );
+            }
           } else {
-            console.error(
-              `[voice/diag] STALLED BOOKING UNRECOVERABLE — insufficient fields. firstName="${firstName ?? "?"}" phone="${phone ?? "?"}" — manual review needed for conv=${body.conversationId}`
-            );
+            // SALES recovery — unchanged path.
+            if (firstName && phone) {
+              console.error(
+                `[voice/diag] RECOVERY firing book_test_drive : firstName="${firstName}" phone="${phone}" model="${modelSlug ?? "?"}" showroom="${showroomName ?? "?"}" email="${email ?? "(none)"}"`
+              );
+              await captureLeadFromBooking({
+                conversationId: body.conversationId,
+                brandSlug: stallRecoveryBrand,
+                modelSlug: modelSlug ?? "",
+                firstName,
+                phone,
+                email: email ?? undefined,
+                showroomName: showroomName ?? undefined,
+                notes: "recovery: stalled-booking-on-end_call",
+              });
+            } else {
+              console.error(
+                `[voice/diag] STALLED SALES BOOKING UNRECOVERABLE — firstName="${firstName ?? "?"}" phone="${phone ?? "?"}" — manual review needed for conv=${body.conversationId}`
+              );
+            }
           }
         }
       }
