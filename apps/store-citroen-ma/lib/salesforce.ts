@@ -147,6 +147,18 @@ export async function createLead(payload: LeadPayload): Promise<SalesforceCreate
 
   if (!res.ok) {
     const text = await res.text();
+    // Stellantis "Lead_Duplicate_Rule" returns HTTP 400 with a duplicateResult
+    // body when a matching lead (same phone / email) already exists. From the
+    // customer's point of view their data IS in the CRM — a commercial sees
+    // the existing record either way. Treat the duplicate as SUCCESS so the
+    // agent never tells the customer "un problème technique" for a booking
+    // that effectively went through. Only genuine errors throw.
+    if (res.status === 400 && isDuplicateError(text)) {
+      console.log(
+        `[salesforce/lead] ◷ duplicate detected — lead already in CRM, treating as success`
+      );
+      return { id: "duplicate-existing-lead", success: true, errors: [] };
+    }
     console.error(`[salesforce/lead] ✗ ${res.status} ${text.slice(0, 400)}`);
     throw new Error(`Salesforce lead creation failed (${res.status}): ${text}`);
   }
@@ -154,6 +166,13 @@ export async function createLead(payload: LeadPayload): Promise<SalesforceCreate
   const json = (await res.json()) as SalesforceCreateResponse;
   console.log(`[salesforce/lead] ✓ created id=${json.id} success=${json.success}`);
   return json;
+}
+
+/** True when a Salesforce 400 body is a duplicate-rule rejection (Lead OR
+ *  Case). The customer's data is effectively in the CRM in that case, so we
+ *  treat it as a success rather than surfacing a technical error. */
+function isDuplicateError(body: string): boolean {
+  return /DUPLICATES_DETECTED|duplicateRule|duplicateResult|Duplicate\s*Rule|Lead\s*Duplicate|Case\s*Duplicate/i.test(body);
 }
 
 // ─── Jeep test-drive helpers ──────────────────────────────────────────────
@@ -315,6 +334,16 @@ export async function createCase(payload: CasePayload): Promise<SalesforceCreate
 
   if (!res.ok) {
     const text = await res.text();
+    // Same duplicate-as-success handling as createLead — a Case the CRM
+    // flags as a duplicate is effectively registered; never surface it as a
+    // technical error to the customer.
+    if (res.status === 400 && isDuplicateError(text)) {
+      console.log(
+        `[salesforce/case] ◷ duplicate detected — case already in CRM, treating as success`
+      );
+      return { id: "duplicate-existing-case", success: true, errors: [] };
+    }
+    console.error(`[salesforce/case] ✗ ${res.status} ${text.slice(0, 400)}`);
     throw new Error(`Salesforce case creation failed (${res.status}): ${text}`);
   }
 
