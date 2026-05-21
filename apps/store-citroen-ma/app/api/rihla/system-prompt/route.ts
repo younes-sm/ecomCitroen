@@ -39,7 +39,7 @@ function mapLocale(l: string | null, market: string): Locale {
 const OPENING_BY_LOCALE: Record<Locale, (brandName: string, agentName: string) => string> = {
   "fr-MA": (b) => `Bienvenue chez ${b}.
 
-Je suis votre assistant virtuel, à votre disposition pour tout ce qui touche à l'univers Jeep au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
+Je suis votre assistante virtuelle, à votre disposition pour tout ce qui touche à l'univers Citroën au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
 
 Comment puis-je vous aider aujourd'hui ?`,
   "darija-MA": (b) => `مرحبا بيك ف ${b}.

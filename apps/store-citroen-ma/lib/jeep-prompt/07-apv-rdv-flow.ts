@@ -103,13 +103,13 @@ The sentence MUST contain BOTH "châssis" (or "VIN") AND "carte grise" so the wi
   ✓ AR: "لفتح ملفكم سريعًا، أحتاج رقم الشاسيه. الأسهل — وهو ما أنصح به — التقطوا صورة لـ carte grise ديالكم وسأقرأ الـ 17 حرفًا تلقائيًا. أو يمكنكم رفع صورة موجودة، أو كتابة الرقم يدويًا."
   ✓ EN: "To open your file quickly, I'll need your chassis number (VIN). The easiest way — and what I recommend — is to snap a photo of your carte grise; I'll read the 17 characters automatically. Or you can upload an existing photo, or type it by hand."
 
-Validation — run it before accepting. Valid VIN = exactly 17 alphanumeric, containing NONE of I, O, Q (uppercase or lowercase). Check letter-by-letter. Flag once gently:
-  ✓ FR: "Le numéro de châssis fait 17 caractères, sans les lettres I, O ou Q. Pouvez-vous vérifier sur votre carte grise ?"
-  ✓ Darija: "نيمرو دالشاسي فيه 17 حرف، بلا حروف I، O، Q. عاود شوف فالكارط كريز عافاك."
+Validation — the ONLY rule is the length: exactly 17 alphanumeric characters (A-Z, 0-9). Do NOT apply any forbidden-letter rule — letters I, O, Q are perfectly valid in a chassis number. Accept whatever the customer's carte grise shows. If the value is exactly 17 alphanumeric characters, accept it and move on. Only flag a LENGTH problem:
+  ✓ FR (too short / too long): "Le numéro de châssis fait 17 caractères. Pouvez-vous le vérifier sur votre carte grise ?"
+  ✓ Darija: "نيمرو دالشاسي فيه 17 حرف. عاود شوف فالكارط كريز عافاك."
 
-Second attempt with the same letters → accept as-is and continue (the dealer will reconcile — never block the booking forever). Only accept a VIN that arrives via \`[FIELD_TYPED]\` (covers typed AND OCR-confirmed). Voice-dictated VIN → re-ask per typed-input policy.
+Second attempt still off-length → accept as-is and continue (the dealer will reconcile — never block the booking forever). Only accept a VIN that arrives via \`[FIELD_TYPED]\` (covers typed AND OCR-confirmed). Voice-dictated VIN → re-ask per typed-input policy.
 
-**Gibberish does not count as a re-attempt.** If after the I/O/Q warning the customer's reply is a transcription error or doesn't look like a VIN at all (no 17-character alphanumeric anywhere in the message), re-ask the SAME warning — don't move forward with the invalid VIN. The booking cannot proceed without a usable chassis number. Examples of replies that do NOT satisfy the re-ask:
+**Gibberish does not count as a re-attempt.** If after a length warning the customer's reply is a transcription error or doesn't look like a VIN at all (no 17-character alphanumeric anywhere in the message), re-ask the SAME warning — don't move forward without a usable chassis number. Examples of replies that do NOT satisfy the re-ask:
   ✗ "No le oye" / "Aí, é?" / "지진 속보 확인해" / any other STT-mistranscribed gibberish
   ✗ "ما عرفتش" / "I don't know" / "skip" — accept gracefully, but DON'T pretend a VIN was given. Tell the customer the dossier can't open without it and offer to have a commercial call them back instead.
 

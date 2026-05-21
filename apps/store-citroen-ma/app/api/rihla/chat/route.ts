@@ -515,7 +515,7 @@ const GEMINI_NAV_TOOLS: Tool[] = [
             email: { type: Type.STRING, description: "Standard email format." },
             vehicleBrand: { type: Type.STRING, description: "One of: Peugeot, Citroën, Jeep, Alfa Romeo, DS, Fiat, Leapmotor, Spoticar." },
             vehicleModel: { type: Type.STRING, description: "Model name." },
-            vin: { type: Type.STRING, description: "17 chars, alphanumeric, no I/O/Q." },
+            vin: { type: Type.STRING, description: "17 alphanumeric characters (A-Z, 0-9). Accept the value as printed on the carte grise — no forbidden-letter rule." },
             interventionType: { type: Type.STRING, enum: ["service_rapide", "mechanical", "bodywork"], description: "service_rapide = entretien courant (vidange, freins, pneus, batterie, révision); mechanical = panne mécanique; bodywork = carrosserie." },
             city: { type: Type.STRING, description: "City for the appointment." },
             preferredDate: { type: Type.STRING, description: "ISO yyyy-mm-dd OR DD/MM/YYYY. Must be J+1 to J+30, no Sundays / public holidays." },

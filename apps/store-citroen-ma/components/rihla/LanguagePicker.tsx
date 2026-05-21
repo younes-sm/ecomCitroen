@@ -70,7 +70,7 @@ export function getLangConfig(id: VoiceLang) {
 const APV_GREETINGS: Record<VoiceLang, string> = {
   fr: `Bienvenue chez Jeep Maroc.
 
-Je suis votre assistant virtuel, à votre disposition pour tout ce qui touche à l'univers Jeep au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
+Je suis votre assistante virtuelle, à votre disposition pour tout ce qui touche à l'univers Jeep au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
 
 Comment puis-je vous aider aujourd'hui ?`,
   darija: `مرحبا بيك ف Jeep Maroc.

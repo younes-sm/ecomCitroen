@@ -1,9 +1,10 @@
-// VIN (Vehicle Identification Number) validation per ISO 3779 and the
-// Stellantis APV spec:
+// VIN (Vehicle Identification Number) validation:
 //   - 17 characters total
-//   - Alphanumeric only
-//   - Letters I, O, Q EXCLUDED (they look like 1 / 0 / 0 — exclusion is
-//     mandated by the standard)
+//   - Alphanumeric only (A-Z, 0-9)
+//
+// We deliberately do NOT enforce the ISO 3779 "no I/O/Q" rule. Real Moroccan
+// carte grise chassis numbers in the field carry those letters, and rejecting
+// them lost real customers / blocked real bookings. Read 17 characters, accept.
 //
 // Returns uppercase canonical form when valid; the trimmed input + reason
 // when not.
@@ -14,7 +15,7 @@ export type VinValidation = {
   reason?: string;
 };
 
-const RE = /^[A-HJ-NPR-Z0-9]{17}$/;
+const RE = /^[A-Z0-9]{17}$/;
 
 export function validateVin(raw: string): VinValidation {
   if (!raw || typeof raw !== "string") {

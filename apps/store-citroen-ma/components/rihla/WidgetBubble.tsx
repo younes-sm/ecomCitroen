@@ -1197,12 +1197,12 @@ function wrapDigits(text: string, keyPrefix = ""): React.ReactNode {
   //      prices like "294 000", "35 000 MAD", "+212 678 43 75 48", or
   //      ISO dates "2026-05-14". Requires 4+ characters total so single
   //      tokens like "14" or "11h" aren't wrapped unnecessarily.
-  //   2. VIN-shaped 17-char alphanumerics (no I/O/Q) — chassis numbers
-  //      need explicit LTR-isolation otherwise they get reversed when
-  //      embedded in an RTL clause.
+  //   2. VIN-shaped 17-char alphanumerics — chassis numbers need explicit
+  //      LTR-isolation otherwise they get reversed when embedded in an RTL
+  //      clause. Any letter A-Z is allowed (no I/O/Q exclusion).
   const patterns: RegExp[] = [
     /(\+?\d[\d\s-]{2,}\d)/g,
-    /\b([A-HJ-NPR-Z0-9]{17})\b/g,
+    /\b([A-Z0-9]{17})\b/g,
   ];
   type Span = { start: number; end: number; text: string };
   const spans: Span[] = [];

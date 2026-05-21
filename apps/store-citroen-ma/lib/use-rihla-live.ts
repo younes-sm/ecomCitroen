@@ -191,7 +191,7 @@ const LIVE_TOOLS = [
       // ─── APV (after-sales) — Jeep widget only. Never call for other brands. ───
       {
         name: "lookup_vin",
-        description: "APV ONLY. Look up a customer by VIN to pre-fill the form. Call as soon as the customer says their VIN (17 alphanumeric chars, no I/O/Q).",
+        description: "APV ONLY. Look up a customer by VIN to pre-fill the form. Call as soon as the customer says their VIN (17 alphanumeric chars).",
         parameters: {
           type: "OBJECT",
           properties: { vin: { type: "STRING" } },

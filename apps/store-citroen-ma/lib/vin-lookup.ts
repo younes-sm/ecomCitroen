@@ -7,8 +7,7 @@
 // brief, which is the strongest UX moment for returning customers.
 //
 // VIN format reminder (validated separately in lib/vin.ts):
-//   17 chars · alphanumeric · letters I/O/Q forbidden.
-// All seeded VINs below pass that validation.
+//   17 chars · alphanumeric (A-Z, 0-9). No forbidden-letter rule.
 
 import { normalizeVin } from "./vin";
 

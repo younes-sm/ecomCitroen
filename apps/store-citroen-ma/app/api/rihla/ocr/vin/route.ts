@@ -8,7 +8,7 @@
 // Pipeline:
 //   1. Receive a JPEG / PNG / WebP image (multipart form, field "image").
 //   2. Send it to Gemini 2.5 Flash with a tight VIN-extraction prompt.
-//   3. Validate the result against the official VIN regex (17 chars, A-HJ-NPR-Z0-9).
+//   3. Validate the result is 17 alphanumeric characters.
 //   4. Return { vin, confidence } — the widget shows a preview and lets the
 //      user confirm before sending it to the agent via [FIELD_TYPED].
 
@@ -18,21 +18,25 @@ import { GoogleGenAI } from "@google/genai";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const VIN_REGEX = /^[A-HJ-NPR-Z0-9]{17}$/;
+// Accept ANY 17 alphanumeric characters. We deliberately do NOT enforce the
+// "no I/O/Q" ISO rule — Moroccan carte grise chassis numbers in the field do
+// contain those letters, and rejecting them lost real customers. Read what's
+// printed, return 17 characters.
+const VIN_REGEX = /^[A-Z0-9]{17}$/;
 const MAX_BYTES = 8 * 1024 * 1024; // 8 MB
 const ALLOWED_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"]);
 
 const SYSTEM_PROMPT = `You are an OCR assistant. Extract the VIN (numéro de châssis) from a photo of a Moroccan carte grise (vehicle registration card).
 
-The VIN is exactly 17 alphanumeric characters. It NEVER contains the letters I, O, or Q (those are visually confusable with 1 and 0).
+The VIN is exactly 17 alphanumeric characters (letters A-Z and digits 0-9). Read EXACTLY what is printed on the card. Do NOT reject or alter any character — if the card shows an O, a Q, or an I, return it as-is. There is no forbidden-character rule. Your only job is to transcribe the 17 characters faithfully.
 
-On a Moroccan carte grise the VIN appears on a line labeled one of: "N° de série", "Numéro de série", "Châssis", "Chassis", "VIN", "رقم الهيكل", "السلسلة".
+On a Moroccan carte grise the VIN appears on a line labeled one of: "N° de série", "Numéro de série", "N° du châssis", "Châssis", "Chassis", "VIN", "رقم الهيكل", "السلسلة".
 
 Reply with a JSON object only, no prose:
 { "vin": "<17-char VIN or null>", "confidence": "high" | "medium" | "low", "reason": "<short explanation if vin is null or low confidence>" }
 
 Rules:
-- If you can read 17 unambiguous characters that match the regex [A-HJ-NPR-Z0-9]{17}, return them as vin with confidence "high".
+- If you can read 17 unambiguous characters [A-Z0-9], return them as vin with confidence "high". Letters I, O, Q are perfectly valid — never flag them, never return null because of them.
 - If the photo is blurry, partial, or you have to guess any character, return your best guess with confidence "medium" or "low".
 - If the photo doesn't look like a vehicle registration card, return vin: null with a short reason.
 - Strip any spaces, dashes, or punctuation from the VIN before returning.

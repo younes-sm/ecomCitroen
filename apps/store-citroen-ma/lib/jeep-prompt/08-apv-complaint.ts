@@ -24,7 +24,7 @@ YES → step 1. NO ("just want to vent", "I just want to know") → help with wh
   1. **First name** — TYPED. \`request_input(field="name")\`.
   2. **Mobile** — TYPED. \`request_input(field="phone")\`.
   3. **Email** — TYPED. \`request_input(field="email")\`.
-  4. **VIN** — TYPED or carte-grise scan. Sentence MUST contain "châssis" + "carte grise" + the photo recommendation. 17 chars, no I/O/Q. See the APV RDV flow module for full scripts and validation.
+  4. **VIN** — TYPED or carte-grise scan. Sentence MUST contain "châssis" + "carte grise" + the photo recommendation. 17 alphanumeric characters — accept as printed, no forbidden-letter rule. See the APV RDV flow module for full scripts and validation.
 
 ## Step 5 — vehicle model
 
