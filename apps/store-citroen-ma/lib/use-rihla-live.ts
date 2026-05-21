@@ -222,7 +222,7 @@ const LIVE_TOOLS = [
       },
       {
         name: "submit_complaint",
-        description: "APV ONLY. MANDATORY : call this the moment the customer says 'oui' to the CNDP question. NEVER emit confirmation text without ALSO calling this tool in the same turn — that drops the complaint silently. Set cndpConsent=true.",
+        description: "APV ONLY. MANDATORY : call this the moment the customer says 'oui' to the CNDP question. NEVER emit confirmation text without ALSO calling this tool in the same turn — that drops the complaint silently. Set cndpConsent=true. vin / vehicleModel / interventionType are OPTIONAL — only fill them for a complaint about a vehicle or a service/repair; OMIT them for a complaint about staff behaviour, reception, pricing, or wait time.",
         parameters: {
           type: "OBJECT",
           properties: {
@@ -239,7 +239,7 @@ const LIVE_TOOLS = [
             attachmentUrl: { type: "STRING" },
             cndpConsent: { type: "BOOLEAN" },
           },
-          required: ["fullName", "phone", "email", "vehicleBrand", "vehicleModel", "vin", "interventionType", "site", "reason", "cndpConsent"],
+          required: ["fullName", "phone", "email", "vehicleBrand", "site", "reason", "cndpConsent"],
         },
       },
     ],
