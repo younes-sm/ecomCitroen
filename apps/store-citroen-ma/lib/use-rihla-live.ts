@@ -836,11 +836,18 @@ export function useRihlaLive(
     streamRef.current?.getAudioTracks().forEach((t) => { t.enabled = !muted; });
   }, []);
 
+  // Tear down the session ONLY when the component truly unmounts. The deps
+  // array MUST stay empty: depending on [disconnect] re-ran this cleanup
+  // every time the disconnect callback was recreated (any re-render where
+  // one of its deps shifted), firing disconnect() mid-call — that killed
+  // the WebSocket and stopped the mic a fraction of a second after the
+  // call started ("mic opens then closes" / "session won't stay open").
+  // disconnectRef always points to the latest disconnect implementation.
   useEffect(() => {
     return () => {
-      disconnect();
+      disconnectRef.current?.();
     };
-  }, [disconnect]);
+  }, []);
 
   // Chrome auto-suspends AudioContexts when the tab is hidden, then leaves
   // them suspended on return — silently killing mic capture mid-call. Re-

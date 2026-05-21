@@ -114,6 +114,11 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   const [voiceLang, setVoiceLang] = useState<VoiceLang | null>(initial.lang);
   const [mode, setMode] = useState<Mode | null>(initial.mode);
 
+  // True from the moment the user ends the call (red button / back) until
+  // they explicitly pick a mode again. Blocks the voice auto-start effect
+  // from silently re-opening a call the user just closed.
+  const userEndedCallRef = useRef(false);
+
   const stage: Stage = !voiceLang ? "lang" : !mode ? "mode" : "chat";
   const langConfig = voiceLang ? getLangConfig(voiceLang) : null;
   const apiLocale = voiceLang === "darija" ? "ar" : voiceLang ?? "fr";
@@ -263,9 +268,18 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
     brand.slug
   );
 
-  // Auto-start the call once the user picks "voice" mode.
+  // Auto-start the call once the user picks "voice" mode. The
+  // userEndedCallRef guard stops this from silently re-opening a call the
+  // user just closed with the red button — without it, a stray re-render
+  // landing on mode==="voice" + state==="idle" relaunched the session.
   useEffect(() => {
-    if (stage === "chat" && mode === "voice" && !live.isConnected && live.state === "idle") {
+    if (
+      stage === "chat" &&
+      mode === "voice" &&
+      !userEndedCallRef.current &&
+      !live.isConnected &&
+      live.state === "idle"
+    ) {
       setMessages([]);
       live.connect();
     }
@@ -314,6 +328,9 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   }, [brand.slug]);
 
   const handleModeSelect = useCallback((m: Mode) => {
+    // The user is actively choosing a mode — clear the "ended" guard so the
+    // voice auto-start effect is allowed to launch a fresh call.
+    userEndedCallRef.current = false;
     setMode(m);
     writeStored(brand.slug, voiceLang, m);
     setMessages([]);
@@ -328,7 +345,10 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   }, [brand.slug, live]);
 
   const resetToMode = useCallback(() => {
-    if (live.isConnected) live.disconnect();
+    // User is leaving the call (red button / back). Mark it so the voice
+    // auto-start effect does NOT immediately relaunch the session.
+    userEndedCallRef.current = true;
+    live.disconnect();
     setMode(null);
     setMessages([]);
     writeStored(brand.slug, voiceLang, null);
@@ -744,7 +764,7 @@ function BubblePanel(p: PanelProps) {
     return (
       <CallView
         state={p.live.state}
-        onHangUp={() => { p.live.disconnect(); p.resetToMode(); }}
+        onHangUp={() => { p.resetToMode(); }}
         duration={p.callDuration}
         accent={p.accent}
         brandName={p.brand.name}
