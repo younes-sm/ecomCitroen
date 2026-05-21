@@ -56,7 +56,7 @@ export function composeJeepPrompt(opts: ComposeOptions): ComposeResult {
   const intent = opts.intent ?? classifyIntent(opts.history);
 
   const sections: string[] = [
-    persona({ todayIso: opts.todayIso, todayHumanFr: opts.todayHumanFr }),
+    persona({ todayIso: opts.todayIso, todayHumanFr: opts.todayHumanFr, mode }),
     LANGUAGE,
     TURN_SHAPE,
     CNDP,
