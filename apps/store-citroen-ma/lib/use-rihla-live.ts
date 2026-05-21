@@ -498,10 +498,13 @@ export function useRihlaLive(
 
   const startMic = useCallback(
     async (ws: WebSocket) => {
+      console.log("%c[voice] 🎙️ requesting microphone…", "color:#22c55e");
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
       streamRef.current = stream;
+      const micLabel = stream.getAudioTracks()[0]?.label || "default device";
+      console.log(`%c[voice] 🎙️ microphone GRANTED — ${micLabel}`, "color:#22c55e;font-weight:bold");
 
       // Reuse the existing micCtxRef if it's still alive — by the second
       // reconnect, creating a fresh AudioContext lands it in "suspended"
@@ -534,7 +537,7 @@ export function useRihlaLive(
       processor.onaudioprocess = (e) => {
         if (!firstAudioFired) {
           firstAudioFired = true;
-          console.log("[rihla-live] mic capture LIVE — first audio frame fired");
+          console.log(`%c[voice] 🎙️ microphone CAPTURING — audio flowing to Gemini (ctx.state=${ctx.state})`, "color:#22c55e;font-weight:bold");
         }
         if (ws.readyState !== WebSocket.OPEN) return;
         const input = e.inputBuffer.getChannelData(0);
@@ -578,7 +581,7 @@ export function useRihlaLive(
 
   // ─── Connect ──────────────────────────────────────────────────────────────
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
     if (!apiKey) {
       console.error("[rihla-live] NEXT_PUBLIC_GOOGLE_API_KEY not set");
@@ -591,10 +594,11 @@ export function useRihlaLive(
     // "mic opens, closes, opens again" flicker). Bail if a session is
     // already being established or is live.
     if (connectInFlightRef.current) {
-      console.warn("[rihla-live] connect() ignored — a session is already in flight");
+      console.warn("[voice] ⚠️ connect() ignored — a session is already in flight");
       return;
     }
     connectInFlightRef.current = true;
+    console.log("%c[voice] ▶️ SESSION STARTING — opening WebSocket + microphone", "color:#3b82f6;font-weight:bold");
 
     // Defensive resets — guard against any stale state from a previous
     // session leaking into the new one. Without this, the first connection
@@ -643,69 +647,95 @@ export function useRihlaLive(
     } catch { /* AudioContext unavailable — non-fatal */ }
 
     updateState("connecting");
-    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
-    // Kick off prompt + voice-session fetches in PARALLEL with the WS open
-    // and with mic permission. Previously these were sequential inside
-    // ws.onopen, costing ~2-4s before the agent could hear the user.
+    // Fetch the system prompt + register the voice conversation BEFORE
+    // opening the WebSocket. Gemini Live closes the socket with code 1007
+    // ("Request contains an invalid argument") if the `setup` message
+    // doesn't arrive promptly after the connection opens. The old code
+    // opened the WS in parallel with these fetches and sent `setup` only
+    // once they resolved inside ws.onopen — when a fetch was slow, Gemini
+    // had already killed the socket, and ws.send() threw "WebSocket is
+    // already in CLOSING or CLOSED state". Fetching first means onopen can
+    // fire setup synchronously, the instant the socket is ready.
     const promptParams = new URLSearchParams({
       locale,
       voice: "1",
       ...(brandSlug ? { brand: brandSlug } : {}),
     });
-    const promptPromise = fetch(`/api/rihla/system-prompt?${promptParams}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null) as Promise<{ systemPrompt: string; voiceName?: string; locale?: string } | null>;
-
-    const voiceStartPromise = brandSlug
-      ? fetch("/api/rihla/voice/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ brandSlug, locale }),
-        })
+    let systemPrompt = "";
+    let resolvedVoice = voiceName;
+    try {
+      const [promptResult, voiceResult] = await Promise.all([
+        fetch(`/api/rihla/system-prompt?${promptParams}`)
           .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null) as Promise<{ id?: string } | null>
-      : Promise.resolve(null);
+          .catch(() => null) as Promise<{ systemPrompt: string; voiceName?: string } | null>,
+        brandSlug
+          ? (fetch("/api/rihla/voice/start", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ brandSlug, locale }),
+            })
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null) as Promise<{ id?: string } | null>)
+          : Promise.resolve(null),
+      ]);
+      systemPrompt = promptResult?.systemPrompt ?? "";
+      resolvedVoice = promptResult?.voiceName ?? voiceName;
+      if (voiceResult?.id) conversationIdRef.current = voiceResult.id;
+    } catch (err) {
+      console.warn("[voice] prompt / voice-start fetch failed", err);
+    }
 
-    // Request mic permission and warm the audio context immediately.
-    // (The processor sends nothing until the WS is open — see startMic.)
+    // The user may have hit the red button while the prompt was loading —
+    // disconnect() clears connectInFlightRef. Abort instead of opening a WS
+    // for a session the user already cancelled.
+    if (!connectInFlightRef.current) {
+      console.warn("%c[voice] ↩️ connect aborted — session cancelled during prompt fetch", "color:#f59e0b");
+      return;
+    }
+
+    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
     // Track session duration so unexpected closes ("user said 3 words then it
     // died") can be distinguished from "10 minute call, then end_call".
     const wsOpenedAt = Date.now();
-    const micPromise = startMic(ws).catch((err) => {
-      console.warn("[rihla-live] mic start failed", err);
+    // Mic acquisition runs alongside the WS handshake. The processor sends
+    // nothing until the WS is OPEN (see startMic), so order doesn't matter.
+    startMic(ws).catch((err) => {
+      console.error("%c[voice] 🎙️ microphone FAILED to start", "color:#ef4444;font-weight:bold", err);
     });
 
-    ws.onopen = async () => {
+    ws.onopen = () => {
+      console.log("%c[voice] 🔌 WebSocket OPEN — sending setup to Gemini", "color:#3b82f6");
       void persistEvent({ kind: "ws_diag", phase: "open" });
-      const [promptResult, voiceResult] = await Promise.all([promptPromise, voiceStartPromise]);
-      const systemPrompt = promptResult?.systemPrompt ?? "";
-      const resolvedVoice = promptResult?.voiceName ?? voiceName;
-      if (voiceResult?.id) conversationIdRef.current = voiceResult.id;
-      // Wait for mic to be ready so the very first setup ack -> first audio
-      // chunks the user produces aren't dropped.
-      await micPromise;
-
-      ws.send(
-        JSON.stringify({
-          setup: {
-            model: "models/gemini-3.1-flash-live-preview",
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              speechConfig: {
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: resolvedVoice } },
+      // Send setup IMMEDIATELY — the prompt is already in hand, no awaiting.
+      try {
+        ws.send(
+          JSON.stringify({
+            setup: {
+              model: "models/gemini-3.1-flash-live-preview",
+              generationConfig: {
+                responseModalities: ["AUDIO"],
+                speechConfig: {
+                  voiceConfig: { prebuiltVoiceConfig: { voiceName: resolvedVoice } },
+                },
               },
+              // Transcribe both sides so we can persist them.
+              inputAudioTranscription: {},
+              outputAudioTranscription: {},
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              tools: LIVE_TOOLS,
             },
-            // Transcribe both sides so we can persist them.
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            tools: LIVE_TOOLS,
-          },
-        })
-      );
+          })
+        );
+        console.log(
+          `%c[voice] ✅ SESSION READY — conv=${conversationIdRef.current ?? "n/a"} voice=${resolvedVoice}`,
+          "color:#22c55e;font-weight:bold"
+        );
+      } catch (err) {
+        console.error("%c[voice] ✗ setup send failed", "color:#ef4444;font-weight:bold", err);
+      }
     };
 
     ws.onmessage = async (e) => {
@@ -738,7 +768,8 @@ export function useRihlaLive(
       updateState("error");
     };
     ws.onclose = (ev) => {
-      console.warn(`[rihla-live] ws closed code=${ev.code} reason="${ev.reason}" wasClean=${ev.wasClean}`);
+      const durSec = ((Date.now() - wsOpenedAt) / 1000).toFixed(1);
+      console.warn(`%c[voice] 🔌 WebSocket CLOSED — code=${ev.code} clean=${ev.wasClean} duration=${durSec}s reason="${ev.reason}"`, "color:#f59e0b");
       void persistEvent({
         kind: "ws_diag",
         phase: "close",
@@ -754,20 +785,23 @@ export function useRihlaLive(
       // automatically, have to close + reopen widget" bug. Bail when this
       // close belongs to a superseded session.
       if (wsRef.current !== ws) {
-        console.warn("[rihla-live] stale ws.onclose ignored — newer session is active");
+        console.warn("%c[voice] ↩️ stale ws.onclose ignored — a newer session is active", "color:#f59e0b");
         return;
       }
       connectInFlightRef.current = false;
       updateState("idle");
       stopMic();
+      console.log("%c[voice] ⏹️ SESSION ENDED — mic released, state=idle", "color:#ef4444;font-weight:bold");
     };
   }, [locale, voiceName, brandSlug, handleMessage, startMic, updateState]);
 
   // ─── Disconnect ───────────────────────────────────────────────────────────
 
   const stopMic = useCallback(() => {
+    const hadStream = !!streamRef.current;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    if (hadStream) console.log("%c[voice] 🎙️ microphone RELEASED — tracks stopped", "color:#ef4444");
     try {
       workletRef.current?.disconnect();
     } catch { /* */ }
@@ -786,6 +820,11 @@ export function useRihlaLive(
   }, []);
 
   const disconnect = useCallback(() => {
+    const wasLive = !!wsRef.current || !!streamRef.current;
+    console.log(
+      `%c[voice] ⏹️ SESSION CLOSING — disconnect() called (conv=${conversationIdRef.current ?? "n/a"}, wsOpen=${!!wsRef.current})`,
+      "color:#ef4444;font-weight:bold"
+    );
     // Mark the voice conversation closed (best effort).
     if (conversationIdRef.current) {
       // Include brandSlug so the server's stalled-booking recovery (in
@@ -803,6 +842,7 @@ export function useRihlaLive(
     userBufferRef.current = "";
     conversationIdRef.current = null;
     updateState("idle");
+    if (wasLive) console.log("%c[voice] ⏹️ SESSION CLOSED — WebSocket closed, mic released, state=idle", "color:#ef4444;font-weight:bold");
   }, [persistEvent, stopMic, updateState]);
 
   disconnectRef.current = disconnect;

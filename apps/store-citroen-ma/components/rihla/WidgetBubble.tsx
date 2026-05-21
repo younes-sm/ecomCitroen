@@ -166,6 +166,19 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   } | null>(null);
   const lastTypeRequestSnippetRef = useRef<string>("");
 
+  // Wipe every per-session UI artifact so a closed call leaves nothing
+  // behind for the next one: model image overlay, showroom cards, the
+  // inline keyboard (typeRequest), the transcript, the duration timer, and
+  // the type-request dedupe key. Called on every path that leaves a call.
+  const clearCallArtifacts = useCallback(() => {
+    setCallImage(null);
+    setCallShowrooms(null);
+    setTypeRequest(null);
+    lastTypeRequestSnippetRef.current = "";
+    setCallDuration(0);
+    setMessages([]);
+  }, []);
+
   useEffect(() => {
     return onImageCard((payload) => {
       setMessages((m) => {
@@ -329,30 +342,33 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
 
   const handleModeSelect = useCallback((m: Mode) => {
     // The user is actively choosing a mode — clear the "ended" guard so the
-    // voice auto-start effect is allowed to launch a fresh call.
+    // voice auto-start effect is allowed to launch a fresh call. Also wipe
+    // any artifacts left by a previous session so the new one starts clean.
     userEndedCallRef.current = false;
+    clearCallArtifacts();
     setMode(m);
     writeStored(brand.slug, voiceLang, m);
-    setMessages([]);
-  }, [brand.slug, voiceLang]);
+  }, [brand.slug, voiceLang, clearCallArtifacts]);
 
   const resetToLang = useCallback(() => {
-    if (live.isConnected) live.disconnect();
+    userEndedCallRef.current = true;
+    live.disconnect();
+    clearCallArtifacts();
     setVoiceLang(null);
     setMode(null);
-    setMessages([]);
     writeStored(brand.slug, null, null);
-  }, [brand.slug, live]);
+  }, [brand.slug, live, clearCallArtifacts]);
 
   const resetToMode = useCallback(() => {
     // User is leaving the call (red button / back). Mark it so the voice
-    // auto-start effect does NOT immediately relaunch the session.
+    // auto-start effect does NOT immediately relaunch the session, and wipe
+    // every per-session artifact so the next call opens with a clean view.
     userEndedCallRef.current = true;
     live.disconnect();
+    clearCallArtifacts();
     setMode(null);
-    setMessages([]);
     writeStored(brand.slug, voiceLang, null);
-  }, [brand.slug, voiceLang, live]);
+  }, [brand.slug, voiceLang, live, clearCallArtifacts]);
 
   const sendTextMessage = useCallback(async (text: string, options?: { marker?: string }) => {
     const current = messagesRef.current;
