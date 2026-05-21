@@ -39,17 +39,17 @@ function mapLocale(l: string | null, market: string): Locale {
 const OPENING_BY_LOCALE: Record<Locale, (brandName: string, agentName: string) => string> = {
   "fr-MA": (b) => `Bienvenue chez ${b}.
 
-Je suis votre assistante virtuelle, à votre disposition pour tout ce qui touche à l'univers Citroën au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
+Je suis votre assistante virtuelle, à votre disposition pour tout ce qui touche à l'univers Jeep au Maroc : découverte de la gamme, essais, configuration, financement, entretien et service après-vente.
 
 Comment puis-je vous aider aujourd'hui ?`,
   "darija-MA": (b) => `مرحبا بيك ف ${b}.
 
-أنا الـ assistant virtuel ديالك، رهن إشارتك ف كل ما يخص عالم Jeep فالمغرب : اكتشاف الـ gamme، essais، configuration، financement، entretien و service après-vente.
+أنا الـ assistante virtuelle ديالك، رهن إشارتك ف كل ما يخص عالم Jeep فالمغرب : اكتشاف الـ gamme، essais، configuration، financement، entretien و service après-vente.
 
 كيفاش نقدر نعاونك اليوم ؟`,
   "ar-MA": (b) => `أهلاً بكم في ${b}.
 
-أنا مساعدكم الافتراضي، في خدمتكم لكل ما يتعلق بعالم Jeep في المغرب : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
+أنا مساعدتكم الافتراضية، في خدمتكم لكل ما يتعلق بعالم Jeep في المغرب : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
 
 كيف يمكنني مساعدتكم اليوم ؟`,
   "en-MA": (b) => `Welcome to ${b}.
@@ -59,7 +59,7 @@ I'm your virtual assistant, here for everything Jeep in Morocco: exploring the r
 How can I help you today?`,
   "ar-SA": (b) => `أهلاً بكم في ${b}.
 
-أنا مساعدكم الافتراضي، في خدمتكم لكل ما يتعلق بعالم Jeep : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
+أنا مساعدتكم الافتراضية، في خدمتكم لكل ما يتعلق بعالم Jeep : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
 
 كيف يمكنني مساعدتكم اليوم ؟`,
   "en-SA": (b) => `Welcome to ${b}.

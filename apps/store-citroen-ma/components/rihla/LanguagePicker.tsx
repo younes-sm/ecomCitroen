@@ -75,12 +75,12 @@ Je suis votre assistante virtuelle, à votre disposition pour tout ce qui touche
 Comment puis-je vous aider aujourd'hui ?`,
   darija: `مرحبا بيك ف Jeep Maroc.
 
-أنا الـ assistant virtuel ديالك، رهن إشارتك ف كل ما يخص عالم Jeep فالمغرب : اكتشاف الـ gamme، essais، configuration، financement، entretien و service après-vente.
+أنا الـ assistante virtuelle ديالك، رهن إشارتك ف كل ما يخص عالم Jeep فالمغرب : اكتشاف الـ gamme، essais، configuration، financement، entretien و service après-vente.
 
 كيفاش نقدر نعاونك اليوم ؟`,
   ar: `أهلاً بكم في Jeep Maroc.
 
-أنا مساعدكم الافتراضي، في خدمتكم لكل ما يتعلق بعالم Jeep في المغرب : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
+أنا مساعدتكم الافتراضية، في خدمتكم لكل ما يتعلق بعالم Jeep في المغرب : اكتشاف المجموعة، تجارب القيادة، التهيئة، التمويل، الصيانة وخدمة ما بعد البيع.
 
 كيف يمكنني مساعدتكم اليوم ؟`,
   en: `Welcome to Jeep Maroc.
