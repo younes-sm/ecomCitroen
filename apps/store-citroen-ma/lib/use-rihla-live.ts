@@ -267,6 +267,13 @@ export function useRihlaLive(
   const playQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
   const shouldDisconnectRef = useRef(false);
+  // Guards against connect() running twice concurrently. React StrictMode
+  // double-invokes effects in dev, and a re-render can re-fire the auto-
+  // start effect — a second connect() would pre-clean (stop the mic stream)
+  // the first connect() just acquired, producing the "mic opens then closes
+  // then opens again" flicker the user reported. Set true the moment
+  // connect() starts, cleared only when the session fully ends.
+  const connectInFlightRef = useRef(false);
   const disconnectRef = useRef<(() => void) | null>(null);
   const callbacksRef = useRef(callbacks);
   callbacksRef.current = callbacks;
@@ -579,6 +586,16 @@ export function useRihlaLive(
       return;
     }
 
+    // In-flight guard: a second connect() while the first is still setting
+    // up would stop the mic stream the first call just acquired (the
+    // "mic opens, closes, opens again" flicker). Bail if a session is
+    // already being established or is live.
+    if (connectInFlightRef.current) {
+      console.warn("[rihla-live] connect() ignored — a session is already in flight");
+      return;
+    }
+    connectInFlightRef.current = true;
+
     // Defensive resets — guard against any stale state from a previous
     // session leaking into the new one. Without this, the first connection
     // after the user navigates back into voice mode could see a leftover
@@ -717,6 +734,7 @@ export function useRihlaLive(
         console.warn("[rihla-live] stale ws.onerror ignored — newer session is active");
         return;
       }
+      connectInFlightRef.current = false;
       updateState("error");
     };
     ws.onclose = (ev) => {
@@ -739,6 +757,7 @@ export function useRihlaLive(
         console.warn("[rihla-live] stale ws.onclose ignored — newer session is active");
         return;
       }
+      connectInFlightRef.current = false;
       updateState("idle");
       stopMic();
     };
@@ -779,6 +798,7 @@ export function useRihlaLive(
     playQueueRef.current = [];
     isPlayingRef.current = false;
     shouldDisconnectRef.current = false;
+    connectInFlightRef.current = false;
     assistantBufferRef.current = "";
     userBufferRef.current = "";
     conversationIdRef.current = null;
