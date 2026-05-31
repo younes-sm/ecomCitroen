@@ -982,6 +982,26 @@ export async function POST(req: NextRequest) {
       const normalizeSlug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
       const shownImagesGuard = new Set<string>((body.sessionContext?.shownModels ?? []).map(normalizeSlug));
       const shownVideosGuard = new Set<string>((body.sessionContext?.shownVideos ?? []).map(normalizeSlug));
+      // find_showrooms dedup. We want to BLOCK re-rendering the showroom
+      // cards once the customer has already tapped "Choisir" on one. The
+      // [MAISON_SELECTED] marker is prepended on the wire ONLY on the turn
+      // the user clicked Choisir; subsequent turns don't carry it. So we
+      // ALSO match the maison name itself in any prior user message —
+      // those names (operator + locality) are unique strings unlikely to
+      // appear in casual chat. Safety net for when the model ignores the
+      // prompt's "do NOT re-call find_showrooms after a pick" rule.
+      const MAISON_NAMES_RE = /\b(Italcar\s+Motorvillage|Autohall|Auto\s*Hall|Orbis\s+Automotive|Fenie\s+Brossette|Maniss\s+Auto|Bouskoura|Maârif|Maarif|Bernoussi)\b/i;
+      const maisonAlreadySelected = body.messages.some(
+        (m) =>
+          m.role === "user" &&
+          (/^\s*\[MAISON_SELECTED\]/i.test(m.content) || MAISON_NAMES_RE.test(m.content))
+      );
+      // Also block re-rendering the SAME city that's already in session
+      // memory (the parent component pushes city names into searchedCities
+      // after find_showrooms emits).
+      const searchedCitiesGuard = new Set<string>(
+        (body.sessionContext?.searchedCities ?? []).map((c) => c.toLowerCase().trim())
+      );
 
       // Wrap the controller so we can also (1) accumulate everything for
       // persistence and (2) intercept duplicate UI-card tool emits.
@@ -1004,6 +1024,22 @@ export async function POST(req: NextRequest) {
                       return; // skip enqueue entirely
                     }
                     if (slug) guard.add(slug);
+                  }
+
+                  // find_showrooms dedup: drop the call entirely if the
+                  // customer has already picked a maison, or if this city
+                  // was already shown earlier in the conversation.
+                  if (ev.type === "tool" && ev.name === "find_showrooms") {
+                    const city = String(ev.input?.city ?? "").toLowerCase().trim();
+                    if (maisonAlreadySelected) {
+                      console.log(`[rihla/chat] suppressed find_showrooms(${city}) — maison already selected this conversation`);
+                      return;
+                    }
+                    if (city && searchedCitiesGuard.has(city)) {
+                      console.log(`[rihla/chat] suppressed duplicate find_showrooms(${city}) — already listed`);
+                      return;
+                    }
+                    if (city) searchedCitiesGuard.add(city);
                   }
 
                   if (ev.type === "text" && ev.text) collectedText.push(ev.text);
@@ -1301,6 +1337,71 @@ export async function POST(req: NextRequest) {
             collectedText.push(continuation);
             stallHandled = true;
           }
+        }
+
+        // Pattern (1.11) : SALES qualification stall after the budget answer.
+        // The customer answered "pour la famille" → agent asked budget → the
+        // customer typed "400 000 dh" → model went silent. The sales-flow
+        // prompt tells the model to emit a recommendation here (model +
+        // price + CTA + show_model_image), but when it doesn't, the generic
+        // "Comment puis-je vous aider à partir de là ?" fallback wipes the
+        // qualification work. Recover by picking a model from budget + usage.
+        const lastAssistantAskedBudget = /\b(budget|envisagez|envisagiez|envisag[ée]es?-?vous|combien.*envisag)\b|الميزانية|ميزانيتك/i.test(lastAssistantText);
+        const userTextClean = userText.replace(/^\s*\[FIELD_TYPED\]\s*/i, "");
+        const budgetDigits = userTextClean.replace(/[\s.,]/g, "").match(/(\d{5,7})/);
+        const userBudget = budgetDigits ? parseInt(budgetDigits[1]!, 10) : null;
+        if (
+          !stallHandled &&
+          silentStall &&
+          lastAssistantAskedBudget &&
+          userBudget &&
+          userBudget >= 100000 &&
+          userBudget < 2000000
+        ) {
+          const transcriptBlob = body.messages
+            .filter((m) => m.role === "user")
+            .map((m) => m.content.toLowerCase())
+            .join(" ");
+          const isAdventure = /\b(aventure|off[\s-]?road|tout[-\s]?terrain|4×4|4x4|wrangler|trail)\b|مغامرة|طرق\s*وعرة/.test(transcriptBlob);
+          const isCity = /\b(ville|urbain|city)\b|مدينة|للمدينة/.test(transcriptBlob);
+
+          // Pick model — budget anchors the band, usage breaks ties.
+          let slug: "avenger" | "compass" | "wrangler" = "compass";
+          let modelLabel = "Compass ALTITUDE MHEV";
+          let pricePublic = "344 000";
+          let priceCleEnMain = "364 405";
+          let pitch = "SUV familial 5 places, hybride léger 145 ch, boîte automatique, idéal pour la famille et les longs trajets";
+
+          if (userBudget >= 800000 || isAdventure) {
+            slug = "wrangler";
+            modelLabel = "Wrangler SAHARA PHEV";
+            pricePublic = "844 000";
+            priceCleEnMain = "870 000";
+            pitch = "SUV iconique hybride rechargeable, 380 ch combinés, vraies capacités 4×4 Trail Rated";
+          } else if (userBudget < 300000 || (isCity && !isAdventure)) {
+            slug = "avenger";
+            modelLabel = "Avenger ALTITUDE MHEV";
+            pricePublic = "294 000";
+            priceCleEnMain = "271 055";
+            pitch = "SUV compact hybride léger 100 ch, parfait pour la ville, boîte automatique";
+          }
+
+          const continuation =
+            localeKey === "ar"
+              ? `بميزانية ${userBudget.toLocaleString("fr-FR").replace(/,/g, " ")} درهم، ${modelLabel} يناسبكم — ${pitch}. السعر العمومي ${pricePublic} درهم، و${priceCleEnMain} درهم مفتاح في اليد. هل ترغبون في حجز قيادة اختبارية ؟`
+              : localeKey === "darija"
+              ? `بهاد الميزانية، ${modelLabel} يناسبك — ${pitch}. Prix public ${pricePublic} دارهم، و ${priceCleEnMain} دارهم clé en main. واش نحجز ليك essai routier ؟`
+              : localeKey === "en"
+              ? `With this budget, the ${modelLabel} is the right fit — ${pitch}. Public price ${pricePublic} dirhams, ${priceCleEnMain} dirhams turnkey. Want me to book you a test drive?`
+              : `Avec ce budget, le ${modelLabel} correspond à votre besoin — ${pitch}. Prix public ${pricePublic} dirhams, clé en main ${priceCleEnMain} dirhams. On vous bloque un essai routier ?`;
+
+          console.warn(
+            `[rihla/chat] post-budget silent stall — recommending ${slug} (locale=${localeKey}, budget=${userBudget}, adventure=${isAdventure}, city=${isCity})`
+          );
+          emit(controller, encoder, { type: "text", text: continuation });
+          collectedText.push(continuation);
+          emit(controller, encoder, { type: "tool", name: "show_model_image", input: { slug } });
+          stallHandled = true;
         }
 
         // Pattern (2) : STALLED BOOKING. Customer said yes to CNDP but the
