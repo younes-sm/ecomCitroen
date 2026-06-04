@@ -15,7 +15,13 @@ import { submitJeepApvAppointment, submitJeepApvComplaint } from "@/lib/salesfor
 
 export type ApvPersistResult = {
   ok: boolean;
+  /** Local human-friendly reference (e.g. "RDV-20260604-001") — what the
+   *  customer sees in the chat / hears in voice. */
   refNumber: string;
+  /** Salesforce Case Id returned by Stellantis CRM ("500Tv00000…") — the
+   *  "Id de ticket créé" from the NBS API spec. Stored for back-office
+   *  cross-reference. `null` if the SF sync failed or hasn't completed. */
+  salesforceCaseId: string | null;
   summary: Record<string, string | undefined>;
   warnings: string[];
 };
@@ -116,47 +122,53 @@ export async function persistAppointment(args: {
     notes: warnings.length > 0 ? `validation-warnings: ${warnings.join(" · ")}` : undefined,
   });
 
-  // Salesforce Case sync — Jeep only. Fire-and-forget so a slow / failing
-  // Stellantis Salesforce never blocks the user-facing booking confirmation.
+  // Salesforce Case sync — Jeep only. Now AWAITED (was fire-and-forget) so
+  // we can return the SF Case Id ("Id de ticket créé" per the NBS API spec)
+  // to the caller — the chat / voice routes surface it to the customer and
+  // store it for back-office cross-reference. Duplicate 400s are treated
+  // as success inside createCase, so a typical call resolves in <1s.
+  let salesforceCaseId: string | null = null;
   if (args.brandSlug === "jeep-ma") {
-    void (async () => {
-      const finalRef = persisted?.refNumber ?? refNumber;
-      try {
-        console.log(
-          `[salesforce/case] → POST appointment ref=${finalRef} conv=${args.conversationId ?? "n/a"}`
-        );
-        const { payload, response } = await submitJeepApvAppointment({
-          fullName: fullNameClean,
-          phone: phoneFinal,
-          email: emailFinal,
-          vehicleModel: String(i.vehicleModel ?? ""),
-          vin: vinFinal,
-          interventionType: intervention,
-          city: String(i.city ?? ""),
-          preferredDate: dateFinal,
-          preferredSlot: slot,
-          comment: typeof i.comment === "string" ? i.comment : undefined,
-          refNumber: finalRef,
-          conversationId: args.conversationId,
-        });
-        console.log("[salesforce/case]   payload:", JSON.stringify(payload, null, 2));
-        console.log("[salesforce/case]   response:", JSON.stringify(response, null, 2));
-        console.log(
-          `[salesforce/case] ✓ Jeep RDV synced: caseId=${response.id} ref=${finalRef} success=${response.success}`
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(
-          `[salesforce/case] ✗ Jeep RDV sync failed for ref=${finalRef}:`,
-          msg
-        );
+    const finalRef = persisted?.refNumber ?? refNumber;
+    try {
+      console.log(
+        `[salesforce/case] → POST appointment ref=${finalRef} conv=${args.conversationId ?? "n/a"}`
+      );
+      const { payload, response } = await submitJeepApvAppointment({
+        fullName: fullNameClean,
+        phone: phoneFinal,
+        email: emailFinal,
+        vehicleModel: String(i.vehicleModel ?? ""),
+        vin: vinFinal,
+        interventionType: intervention,
+        city: String(i.city ?? ""),
+        preferredDate: dateFinal,
+        preferredSlot: slot,
+        comment: typeof i.comment === "string" ? i.comment : undefined,
+        refNumber: finalRef,
+        conversationId: args.conversationId,
+      });
+      console.log("[salesforce/case]   payload:", JSON.stringify(payload, null, 2));
+      console.log("[salesforce/case]   response:", JSON.stringify(response, null, 2));
+      console.log(
+        `[salesforce/case] ✓ Jeep RDV synced: caseId=${response.id} ref=${finalRef} success=${response.success}`
+      );
+      if (response.success && response.id) {
+        salesforceCaseId = response.id;
       }
-    })();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[salesforce/case] ✗ Jeep RDV sync failed for ref=${finalRef}:`,
+        msg
+      );
+    }
   }
 
   return {
     ok: !!persisted,
     refNumber: persisted?.refNumber ?? refNumber,
+    salesforceCaseId,
     summary: {
       fullName: fullNameClean,
       phone: phoneFinal,
@@ -252,45 +264,49 @@ export async function persistComplaint(args: {
     crcNotes: warnings.length > 0 ? `validation-warnings: ${warnings.join(" · ")}` : undefined,
   });
 
+  // Salesforce Case sync — awaited so we can return the SF Case Id.
+  let salesforceCaseId: string | null = null;
   if (args.brandSlug === "jeep-ma") {
-    void (async () => {
-      const finalRef = persisted?.refNumber ?? refNumber;
-      try {
-        console.log(
-          `[salesforce/case] → POST complaint ref=${finalRef} conv=${args.conversationId ?? "n/a"}`
-        );
-        const { payload, response } = await submitJeepApvComplaint({
-          fullName: fullNameClean,
-          phone: phoneFinal,
-          email: emailFinal,
-          vehicleModel: String(i.vehicleModel ?? ""),
-          vin: vinFinal,
-          interventionType: intervention,
-          site: String(i.site ?? ""),
-          serviceDate: serviceDateFinal,
-          reason,
-          attachmentUrl: typeof i.attachmentUrl === "string" ? i.attachmentUrl : undefined,
-          refNumber: finalRef,
-          conversationId: args.conversationId,
-        });
-        console.log("[salesforce/case]   payload:", JSON.stringify(payload, null, 2));
-        console.log("[salesforce/case]   response:", JSON.stringify(response, null, 2));
-        console.log(
-          `[salesforce/case] ✓ Jeep réclamation synced: caseId=${response.id} ref=${finalRef} success=${response.success}`
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(
-          `[salesforce/case] ✗ Jeep réclamation sync failed for ref=${finalRef}:`,
-          msg
-        );
+    const finalRef = persisted?.refNumber ?? refNumber;
+    try {
+      console.log(
+        `[salesforce/case] → POST complaint ref=${finalRef} conv=${args.conversationId ?? "n/a"}`
+      );
+      const { payload, response } = await submitJeepApvComplaint({
+        fullName: fullNameClean,
+        phone: phoneFinal,
+        email: emailFinal,
+        vehicleModel: String(i.vehicleModel ?? ""),
+        vin: vinFinal,
+        interventionType: intervention,
+        site: String(i.site ?? ""),
+        serviceDate: serviceDateFinal,
+        reason,
+        attachmentUrl: typeof i.attachmentUrl === "string" ? i.attachmentUrl : undefined,
+        refNumber: finalRef,
+        conversationId: args.conversationId,
+      });
+      console.log("[salesforce/case]   payload:", JSON.stringify(payload, null, 2));
+      console.log("[salesforce/case]   response:", JSON.stringify(response, null, 2));
+      console.log(
+        `[salesforce/case] ✓ Jeep réclamation synced: caseId=${response.id} ref=${finalRef} success=${response.success}`
+      );
+      if (response.success && response.id) {
+        salesforceCaseId = response.id;
       }
-    })();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[salesforce/case] ✗ Jeep réclamation sync failed for ref=${finalRef}:`,
+        msg
+      );
+    }
   }
 
   return {
     ok: !!persisted,
     refNumber: persisted?.refNumber ?? refNumber,
+    salesforceCaseId,
     summary: {
       fullName: fullNameClean,
       phone: phoneFinal,

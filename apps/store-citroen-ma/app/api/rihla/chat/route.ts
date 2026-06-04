@@ -1101,6 +1101,7 @@ export async function POST(req: NextRequest) {
                 type: "apv_confirmation",
                 kind: "appointment",
                 refNumber: result.refNumber,
+                salesforceCaseId: result.salesforceCaseId,
                 ok: result.ok,
                 summary: result.summary,
                 warnings: result.warnings,
@@ -1116,6 +1117,7 @@ export async function POST(req: NextRequest) {
                 type: "apv_confirmation",
                 kind: "complaint",
                 refNumber: result.refNumber,
+                salesforceCaseId: result.salesforceCaseId,
                 ok: result.ok,
                 summary: result.summary,
                 warnings: result.warnings,
@@ -1449,44 +1451,36 @@ export async function POST(req: NextRequest) {
                 t.name === "book_service_appointment" ||
                 t.name === "submit_complaint"
             );
-            const successMsg =
-              localeKey === "ar"
-                ? "تم استلام معلوماتكم بنجاح. سيتصل بكم un commercial من la maison Jeep في أقرب وقت لتأكيد الموعد. هل هناك شيء آخر يمكنني مساعدتكم به ؟"
-                : localeKey === "darija"
-                ? "تسجلات المعلومات ديالك بنجاح. commercial من la maison Jeep غيعاود ليك بزربة باش يأكد الموعد. واش كاينة شي حاجة أخرى نقدر نعاونك بيها ؟"
-                : localeKey === "en"
-                ? "Your request has been successfully registered. A Jeep commercial will reach out shortly to confirm the slot. Anything else I can help with?"
-                : "Votre demande a bien été enregistrée. Un commercial de la maison Jeep va vous recontacter pour confirmer le créneau. Y a-t-il autre chose dont vous avez besoin ?";
-            if (retriedToolFired && !retriedText) {
-              // Booking fired but the model produced no text — inject the
-              // success message ourselves. This is the most common path
-              // when the forced-tool retry succeeds.
-              emit(controller, encoder, { type: "text", text: successMsg });
-              collectedText.push(successMsg);
-            } else if (!retriedToolFired && !retriedText) {
-              // Both retry attempts produced nothing. Fall back to the
-              // positive acknowledgement so the customer isn't stuck. The
-              // lead is still captured in Supabase + conversation log on
-              // our side — a commercial will reach out from there.
-              emit(controller, encoder, { type: "text", text: successMsg });
-              collectedText.push(successMsg);
-            }
+            // Track the reference number returned by whichever persistence
+            // path actually fires (inline retry loop OR server-side failsafe
+            // below). The customer-facing success message is built AFTER all
+            // persistence is done, so it can include the real ref number
+            // ("votre référence : RDV-2026-0604-001") instead of a generic
+            // "demande enregistrée" with no ID — that was the user-reported
+            // "is not returning id" bug.
+            let recoveryRefNumber: string | null = null;
+
             // Persistence may need to run for NEWLY-emitted tools (the retry
             // can fire any of the 4 booking tools). Skip tools already
             // handled by the inline block above to avoid double-pushing to
             // Salesforce / Supabase.
+            let persistenceFiredThisRetry = false;
             if (jeepEnabled && body.brandSlug) {
               for (let idx = 0; idx < collectedTools.length; idx += 1) {
                 if (inlinePersistedToolIdx.has(idx)) continue;
                 const t = collectedTools[idx]!;
                 if (t.name === "book_service_appointment") {
                   const result = await persistAppointment({ brandSlug: body.brandSlug, conversationId, input: t.input });
-                  emit(controller, encoder, { type: "apv_confirmation", kind: "appointment", refNumber: result.refNumber, ok: result.ok, summary: result.summary, warnings: result.warnings });
+                  emit(controller, encoder, { type: "apv_confirmation", kind: "appointment", refNumber: result.refNumber, salesforceCaseId: result.salesforceCaseId, ok: result.ok, summary: result.summary, warnings: result.warnings });
                   inlinePersistedToolIdx.add(idx);
+                  persistenceFiredThisRetry = true;
+                  recoveryRefNumber = result.refNumber;
                 } else if (t.name === "submit_complaint") {
                   const result = await persistComplaint({ brandSlug: body.brandSlug, conversationId, input: t.input });
-                  emit(controller, encoder, { type: "apv_confirmation", kind: "complaint", refNumber: result.refNumber, ok: result.ok, summary: result.summary, warnings: result.warnings });
+                  emit(controller, encoder, { type: "apv_confirmation", kind: "complaint", refNumber: result.refNumber, salesforceCaseId: result.salesforceCaseId, ok: result.ok, summary: result.summary, warnings: result.warnings });
                   inlinePersistedToolIdx.add(idx);
+                  persistenceFiredThisRetry = true;
+                  recoveryRefNumber = result.refNumber;
                 } else if (
                   (t.name === "book_test_drive" || t.name === "book_showroom_visit") &&
                   conversationId
@@ -1512,11 +1506,154 @@ export async function POST(req: NextRequest) {
                       notes: noteParts.length > 0 ? noteParts.join(" · ") : undefined,
                     });
                     inlinePersistedToolIdx.add(idx);
-                    // Duplicate is treated as success — see inline block
-                    // above for rationale. No customer-facing message.
+                    persistenceFiredThisRetry = true;
+                    // SALES leads (book_test_drive / book_showroom_visit)
+                    // don't carry a ref number we surface to the customer;
+                    // Salesforce assigns one async. Leave recoveryRefNumber
+                    // null and use the no-ref message below.
                   }
                 }
               }
+            }
+
+            // ── FAILSAFE: server-side direct persistence ──────────────────
+            // If the Gemini retry STILL didn't land usable booking args (the
+            // model returned no function_call OR returned one with missing
+            // firstName/phone), the lead never reached Salesforce. The data
+            // IS in the conversation though — extract it from history and
+            // fire persistence DIRECTLY. This is what the user's "STALLED
+            // BOOKING ... not working" report needed: a path that doesn't
+            // depend on Gemini to repeat the booking args.
+            if (!persistenceFiredThisRetry && jeepEnabled && body.brandSlug && conversationId) {
+              const recoveredIntent = classifyIntent(body.messages);
+              const recoveredState = extractFlowState(body.messages);
+              const transcriptBlob = body.messages.map((m) => m.content).join(" ");
+              // Maison name from transcript (covers cases where the
+              // [MAISON_SELECTED] marker has been dropped from history).
+              const maisonNameMatch = transcriptBlob.match(
+                /((?:Italcar\s+Motorvillage(?:\s+(?:Bouskoura|Maârif|Maarif))?|Autohall(?:\s+Bernoussi)?|Auto\s+Hall(?:\s+Marrakech)?|Orbis\s+Automotive|Fenie\s+Brossette|Maniss\s+Auto)[^,.\n]{0,40})/i
+              );
+              const showroomName = maisonNameMatch?.[1]?.trim() ?? recoveredState.maison ?? "";
+              // Slot inference from transcript.
+              const slotFinal: "morning" | "afternoon" = /(matin|صباح|sbah|morning|\b(?:8|9|10|11)\s*h)/i.test(transcriptBlob)
+                ? "morning"
+                : /(apr[èe]s[-\s]?midi|عشية|afternoon|\b(?:1[3-7])\s*h)/i.test(transcriptBlob)
+                ? "afternoon"
+                : "morning";
+              // Date — ISO match in any earlier turn (the SALES path uses
+              // free-form preferredSlot like "samedi matin" so no ISO needed
+              // there; APV expects YYYY-MM-DD).
+              const isoDateMatch = transcriptBlob.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+              const preferredDateFinal = isoDateMatch?.[1] ?? "";
+
+              if (recoveredState.firstName && recoveredState.phone) {
+                try {
+                  if (recoveredIntent === "apv-rdv") {
+                    const result = await persistAppointment({
+                      brandSlug: body.brandSlug,
+                      conversationId,
+                      input: {
+                        fullName: recoveredState.firstName,
+                        phone: recoveredState.phone,
+                        email: recoveredState.email ?? "",
+                        vehicleBrand: "Jeep",
+                        vehicleModel: recoveredState.model ?? "",
+                        vin: recoveredState.vin ?? "",
+                        interventionType: recoveredState.intervention ?? "service_rapide",
+                        city: recoveredState.city ?? "",
+                        preferredDate: preferredDateFinal,
+                        preferredSlot: slotFinal,
+                        comment: `recovery: stalled-booking server-side fallback · maison=${showroomName || "?"}`,
+                        cndpConsent: true,
+                      },
+                    });
+                    emit(controller, encoder, {
+                      type: "apv_confirmation", kind: "appointment",
+                      refNumber: result.refNumber, salesforceCaseId: result.salesforceCaseId,
+                      ok: result.ok, summary: result.summary, warnings: result.warnings,
+                    });
+                    recoveryRefNumber = result.refNumber;
+                  } else if (recoveredIntent === "apv-complaint") {
+                    const result = await persistComplaint({
+                      brandSlug: body.brandSlug,
+                      conversationId,
+                      input: {
+                        fullName: recoveredState.firstName,
+                        phone: recoveredState.phone,
+                        email: recoveredState.email ?? "",
+                        vehicleBrand: "Jeep",
+                        vehicleModel: recoveredState.model ?? "",
+                        vin: recoveredState.vin ?? "",
+                        interventionType: recoveredState.intervention ?? undefined,
+                        site: showroomName,
+                        reason: "[recovery] détail dans la conversation — stalled-booking server-side fallback",
+                        cndpConsent: true,
+                      },
+                    });
+                    emit(controller, encoder, {
+                      type: "apv_confirmation", kind: "complaint",
+                      refNumber: result.refNumber, salesforceCaseId: result.salesforceCaseId,
+                      ok: result.ok, summary: result.summary, warnings: result.warnings,
+                    });
+                    recoveryRefNumber = result.refNumber;
+                  } else {
+                    // SALES — book_test_drive
+                    const market = brand.market === "SA" ? "SA" : "MA";
+                    const phoneCheck = validatePhone(recoveredState.phone, market);
+                    const phoneToStore = phoneCheck.ok ? phoneCheck.canonical : normalizePhone(recoveredState.phone, market);
+                    await captureLeadFromBooking({
+                      conversationId,
+                      brandSlug: body.brandSlug,
+                      modelSlug: recoveredState.model ?? "",
+                      firstName: recoveredState.firstName,
+                      phone: phoneToStore,
+                      email: recoveredState.email,
+                      city: recoveredState.city,
+                      preferredSlot: slotFinal,
+                      showroomName: showroomName || undefined,
+                      notes: "recovery: stalled-booking server-side fallback",
+                    });
+                  }
+                  console.error(
+                    `[rihla/chat] STALLED BOOKING — server-side direct persistence FIRED. intent=${recoveredIntent} firstName="${recoveredState.firstName}" phone="${recoveredState.phone}" model="${recoveredState.model ?? "?"}" city="${recoveredState.city ?? "?"}" maison="${showroomName || "?"}" slot=${slotFinal}`
+                  );
+                } catch (err) {
+                  console.error(
+                    `[rihla/chat] STALLED BOOKING — direct persistence threw: ${(err as Error).message?.slice(0, 200)}`
+                  );
+                }
+              } else {
+                console.error(
+                  `[rihla/chat] STALLED BOOKING UNRECOVERABLE — missing firstName/phone in transcript. firstName="${recoveredState.firstName ?? "?"}" phone="${recoveredState.phone ?? "?"}" conv=${conversationId}`
+                );
+              }
+            }
+
+            // Customer-facing success message — emitted ONLY after all
+            // persistence is done so we can include the real reference
+            // number ("votre référence : RDV-2026-0604-001"). Without this,
+            // the customer saw "demande enregistrée" but no ref, which the
+            // user reported as "is not returning id".
+            if (!retriedText) {
+              const refSuffix = recoveryRefNumber
+                ? localeKey === "ar"
+                  ? ` المرجع : ${recoveryRefNumber}.`
+                  : localeKey === "darija"
+                  ? ` الريفيرونص : ${recoveryRefNumber}.`
+                  : localeKey === "en"
+                  ? ` Your reference : ${recoveryRefNumber}.`
+                  : ` Votre référence : ${recoveryRefNumber}.`
+                : "";
+              const successMsg =
+                localeKey === "ar"
+                  ? `تم استلام معلوماتكم بنجاح.${refSuffix} سيتصل بكم un commercial من la maison Jeep في أقرب وقت لتأكيد الموعد. هل هناك شيء آخر يمكنني مساعدتكم به ؟`
+                  : localeKey === "darija"
+                  ? `تسجلات المعلومات ديالك بنجاح.${refSuffix} commercial من la maison Jeep غيعاود ليك بزربة باش يأكد الموعد. واش كاينة شي حاجة أخرى نقدر نعاونك بيها ؟`
+                  : localeKey === "en"
+                  ? `Your request has been successfully registered.${refSuffix} A Jeep commercial will reach out shortly to confirm the slot. Anything else I can help with?`
+                  : `Votre demande a bien été enregistrée.${refSuffix} Un commercial de la maison Jeep va vous recontacter pour confirmer le créneau. Y a-t-il autre chose dont vous avez besoin ?`;
+              emit(controller, encoder, { type: "text", text: successMsg });
+              collectedText.push(successMsg);
             }
             stallHandled = true;
           }

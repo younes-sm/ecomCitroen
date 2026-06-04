@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
         input: body.input,
       });
       console.log(
-        `[voice/tool] book_service_appointment ok=${result.ok} ref=${result.refNumber} warnings=${result.warnings.join("|") || "-"}`
+        `[voice/tool] book_service_appointment ok=${result.ok} ref=${result.refNumber} caseId=${result.salesforceCaseId ?? "-"} warnings=${result.warnings.join("|") || "-"}`
       );
       // We deliberately do NOT return `warnings` to the voice model — these
       // are backend validation flags (e.g. "vin-format: too-long") meant for
@@ -107,6 +107,7 @@ export async function POST(req: NextRequest) {
       return Response.json({
         ok: true,
         refNumber: result.refNumber,
+        salesforceCaseId: result.salesforceCaseId,
         message: `Appointment saved. Reference: ${result.refNumber}.`,
       });
     } else if (body.name === "submit_complaint") {
@@ -116,11 +117,12 @@ export async function POST(req: NextRequest) {
         input: body.input,
       });
       console.log(
-        `[voice/tool] submit_complaint ok=${result.ok} ref=${result.refNumber} warnings=${result.warnings.join("|") || "-"}`
+        `[voice/tool] submit_complaint ok=${result.ok} ref=${result.refNumber} caseId=${result.salesforceCaseId ?? "-"} warnings=${result.warnings.join("|") || "-"}`
       );
       return Response.json({
         ok: true,
         refNumber: result.refNumber,
+        salesforceCaseId: result.salesforceCaseId,
         message: `Complaint saved. Reference: ${result.refNumber}.`,
       });
     }
