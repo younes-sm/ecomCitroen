@@ -1,6 +1,8 @@
 // Salesforce REST integration — OAuth2 password flow + Lead creation.
 // Used to push Jeep test-drive bookings into Stellantis CRM.
 
+import { resolveJeepLeadPicklists } from "./salesforce-picklists";
+
 const SF_AUTH_URL =
   process.env.SF_AUTH_URL ?? "https://login.salesforce.com/services/oauth2/token";
 const SF_LEAD_URL =
@@ -98,6 +100,8 @@ export interface LeadPayload {
   FirstName: string;
   MobilePhone: string;
   Email: string;
+  // Legacy free-text fields — kept for backward compatibility on existing
+  // reports / list views that read them.
   Marque_interet_FB__c: string;
   Modele_d_interet_Text__c: string;
   Showroom_Text__c: string;
@@ -107,6 +111,17 @@ export interface LeadPayload {
   Ticket_type__c: string;
   Description: string;
   RecordTypeId: string;
+  // Picklist fields (Stellantis PROD spec — values from lib/salesforce-
+  // picklists.ts). Optional because resolveJeepLeadPicklists returns
+  // undefined for unresolvable values — we OMIT the field in that case
+  // rather than send a bad picklist (would 400 with INVALID_OR_NULL_FOR_-
+  // RESTRICTED_PICKLIST). The four fields enforce dependencies:
+  //   Marque_d_interet__c → Serie_Modele__c
+  //   Dealer__c           → Showroom__c
+  Marque_d_interet__c?: string;
+  Serie_Modele__c?: string;
+  Dealer__c?: string;
+  Showroom__c?: string;
 }
 
 export interface SalesforceCreateResponse {
@@ -256,7 +271,16 @@ export function buildJeepLead(input: JeepTestDriveInput): LeadPayload {
     input.conversationId ? `Conversation ID: ${input.conversationId}` : null,
   ].filter(Boolean) as string[];
 
-  return {
+  // Resolve the four dependent picklists (Marque ⇨ Modèle, Dealer ⇨ Showroom)
+  // from the customer's slug + maison choice. Anything unresolvable comes
+  // back undefined and is OMITTED below — never send an unknown picklist
+  // value, Salesforce 400s with INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST.
+  const picklists = resolveJeepLeadPicklists({
+    modelSlug: input.modelSlug ?? "",
+    showroomApiName: input.showroom,
+  });
+
+  const payload: LeadPayload = {
     Salutation: "Mr.",
     FirstName: input.firstName,
     LastName: input.lastName?.trim() || "(non communiqué)",
@@ -272,6 +296,15 @@ export function buildJeepLead(input: JeepTestDriveInput): LeadPayload {
     Description: descriptionLines.join("\n"),
     RecordTypeId: recordTypeId,
   };
+
+  // Conditionally attach each picklist only when the resolver returned a
+  // value — keeps the JSON clean and avoids accidentally sending blanks.
+  if (picklists.Marque_d_interet__c) payload.Marque_d_interet__c = picklists.Marque_d_interet__c;
+  if (picklists.Serie_Modele__c)     payload.Serie_Modele__c     = picklists.Serie_Modele__c;
+  if (picklists.Dealer__c)           payload.Dealer__c           = picklists.Dealer__c;
+  if (picklists.Showroom__c)         payload.Showroom__c         = picklists.Showroom__c;
+
+  return payload;
 }
 
 export async function submitJeepTestDriveLead(
@@ -299,6 +332,8 @@ export interface CasePayload {
   SuppliedPhone: string;
   SuppliedEmail: string;
   Ville__c: string;
+  // Legacy free-text fields — kept for backward compatibility on existing
+  // Salesforce reports / list views that read them.
   Marque_interet_FB__c: string;
   Modele_d_interet_Text__c: string;
   Showroom_FB__c: string;
@@ -308,6 +343,17 @@ export interface CasePayload {
   RecordTypeId?: string;
   Numero_de_chassis__c: string;
   Date_de_RDV__c?: string;
+  // Picklist fields (Stellantis PROD spec — values from lib/salesforce-
+  // picklists.ts). Optional — resolveJeepLeadPicklists returns undefined
+  // for unresolvable values and the caller omits them rather than send a
+  // bad picklist (would 400 with INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST).
+  // Dependencies:
+  //   Marque_d_interet__c → Serie_Modele__c
+  //   Dealer__c           → Showroom__c
+  Marque_d_interet__c?: string;
+  Serie_Modele__c?: string;
+  Dealer__c?: string;
+  Showroom__c?: string;
 }
 
 async function postCase(token: string, payload: CasePayload): Promise<Response> {
@@ -360,6 +406,10 @@ export type JeepApvAppointmentInput = {
   vin: string;
   interventionType: ApvInterventionType;
   city: string;
+  /** Canonical maison API name ("FCA - CASABLANCA - …") — used as the
+   *  Showroom__c picklist value AND to resolve the parent Dealer__c. When
+   *  omitted, both fields are dropped from the payload. */
+  showroom?: string;
   preferredDate: string;
   preferredSlot: "morning" | "afternoon";
   comment?: string;
@@ -432,14 +482,23 @@ export function buildJeepApvAppointmentCase(input: JeepApvAppointmentInput): Cas
     .filter(Boolean)
     .join("\n");
 
-  return {
+  // Resolve the 4 dependent picklists from the customer's slug + showroom.
+  // Unresolvable values come back undefined and are OMITTED below so
+  // Salesforce never sees a bad picklist value.
+  const picklists = resolveJeepLeadPicklists({
+    modelSlug: input.vehicleModel,
+    showroomApiName: input.showroom,
+  });
+  const showroomFB = input.showroom?.trim() || input.city.trim();
+
+  const payload: CasePayload = {
     SuppliedName: fullName,
     SuppliedPhone: normalizePhone(input.phone),
     SuppliedEmail: input.email.trim(),
     Ville__c: input.city.trim(),
     Marque_interet_FB__c: "Jeep",
     Modele_d_interet_Text__c: modelLabelFromSlug(input.vehicleModel),
-    Showroom_FB__c: input.city.trim(),
+    Showroom_FB__c: showroomFB,
     Description: description,
     is_Web__c: true,
     Type: "Prise de RDV",
@@ -447,6 +506,11 @@ export function buildJeepApvAppointmentCase(input: JeepApvAppointmentInput): Cas
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
     Date_de_RDV__c: toAppointmentDateTime(input.preferredDate, input.preferredSlot),
   };
+  if (picklists.Marque_d_interet__c) payload.Marque_d_interet__c = picklists.Marque_d_interet__c;
+  if (picklists.Serie_Modele__c)     payload.Serie_Modele__c     = picklists.Serie_Modele__c;
+  if (picklists.Dealer__c)           payload.Dealer__c           = picklists.Dealer__c;
+  if (picklists.Showroom__c)         payload.Showroom__c         = picklists.Showroom__c;
+  return payload;
 }
 
 export function buildJeepApvComplaintCase(input: JeepApvComplaintInput): CasePayload {
@@ -465,7 +529,13 @@ export function buildJeepApvComplaintCase(input: JeepApvComplaintInput): CasePay
     .filter(Boolean)
     .join("\n");
 
-  return {
+  // For complaints `input.site` IS the canonical maison API name.
+  const picklists = resolveJeepLeadPicklists({
+    modelSlug: input.vehicleModel,
+    showroomApiName: input.site,
+  });
+
+  const payload: CasePayload = {
     SuppliedName: fullName,
     SuppliedPhone: normalizePhone(input.phone),
     SuppliedEmail: input.email.trim(),
@@ -479,6 +549,11 @@ export function buildJeepApvComplaintCase(input: JeepApvComplaintInput): CasePay
     RecordTypeId: RECORD_TYPE_RECLAMATION_SAV,
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
   };
+  if (picklists.Marque_d_interet__c) payload.Marque_d_interet__c = picklists.Marque_d_interet__c;
+  if (picklists.Serie_Modele__c)     payload.Serie_Modele__c     = picklists.Serie_Modele__c;
+  if (picklists.Dealer__c)           payload.Dealer__c           = picklists.Dealer__c;
+  if (picklists.Showroom__c)         payload.Showroom__c         = picklists.Showroom__c;
+  return payload;
 }
 
 export async function submitJeepApvAppointment(

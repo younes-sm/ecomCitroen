@@ -252,12 +252,33 @@ export async function captureLeadFromBooking(args: {
   const supa = client();
   if (!supa) return result;
   // Trim + lightly validate email so a "yes, take it" garbage value doesn't
-  // poison the leads table. Anything that doesn't look like an email is
-  // dropped silently — Salesforce sync below will then skip the field too.
+  // poison the leads table. Also strip wire-marker leakage — Gemini has
+  // been observed copying fragments of "[FIELD_TYPED] younes@gmail.com"
+  // into tool args, producing values like "[FIELD@gmail.com" that pass
+  // the loose email regex but crash Salesforce with INVALID_EMAIL_ADDRESS.
+  // Anything that starts with "[" + an uppercase token is treated as a
+  // leaked marker and dropped.
   const cleanEmail = (() => {
     const e = args.email?.trim();
     if (!e) return undefined;
+    if (/^\[[A-Z_]+/.test(e)) return undefined;
+    if (/FIELD_?TYPED|MAISON_?SELECTED/i.test(e)) return undefined;
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : undefined;
+  })();
+  // Same defence on firstName + phone before we hand them to Salesforce.
+  const cleanFirstName = (() => {
+    const n = args.firstName?.trim();
+    if (!n) return n;
+    if (/^\[[A-Z_]+/.test(n)) return "(non communiqué)";
+    if (/FIELD_?TYPED|MAISON_?SELECTED/i.test(n)) return "(non communiqué)";
+    return n;
+  })();
+  const cleanPhone = (() => {
+    const p = args.phone?.trim();
+    if (!p) return p;
+    if (/^\[[A-Z_]+/.test(p)) return "";
+    if (/FIELD_?TYPED|MAISON_?SELECTED/i.test(p)) return "";
+    return p;
   })();
   try {
     const { data: brandRow } = await supa.from("brands").select("id").eq("slug", args.brandSlug).single();
@@ -268,8 +289,8 @@ export async function captureLeadFromBooking(args: {
       brand_id: brandId,
       conversation_id: args.conversationId,
       model_slug: args.modelSlug,
-      first_name: args.firstName,
-      phone: args.phone,
+      first_name: cleanFirstName,
+      phone: cleanPhone,
       city: args.city ?? null,
       preferred_slot: args.preferredSlot ?? null,
       status: "new",
@@ -287,8 +308,8 @@ export async function captureLeadFromBooking(args: {
       captured_phone: new Date().toISOString(),
       captured_city: args.city ? new Date().toISOString() : null,
       captured_slot: args.preferredSlot ? new Date().toISOString() : null,
-      lead_name: args.firstName,
-      lead_phone: args.phone,
+      lead_name: cleanFirstName,
+      lead_phone: cleanPhone,
       lead_city: args.city ?? null,
       lead_slot: args.preferredSlot ?? null,
       lead_model_slug: args.modelSlug,
@@ -313,8 +334,8 @@ export async function captureLeadFromBooking(args: {
   if (args.brandSlug === "jeep-ma") {
     try {
       const sfResult = await submitJeepTestDriveLead({
-        firstName: args.firstName,
-        phone: args.phone,
+        firstName: cleanFirstName ?? args.firstName,
+        phone: cleanPhone ?? args.phone,
         email: cleanEmail,
         city: args.city,
         modelSlug: args.modelSlug,

@@ -26,17 +26,26 @@ export type ApvPersistResult = {
   warnings: string[];
 };
 
-// Strip any obvious placeholder string the model might have shoved into a
-// required field ("<customer_phone_from_session>", "<customer_email_if_collected_by_STEP_4>",
-// "TBD", "(non communiqué)", any value with < or > or "STEP_"). These come
-// from the model hallucinating template syntax instead of asking for the
-// real value — they crash Salesforce with INVALID_EMAIL_ADDRESS / invalid
-// phone format. Treat them as missing so the per-field validators reject
-// cleanly and the lead lands with a warning instead of a Salesforce 400.
+// Strip any obvious placeholder / marker the model might have shoved into a
+// required field. Sources of bad values we've actually seen in production:
+//   - Template syntax the model hallucinated:
+//       "<customer_phone_from_session>", "<...STEP_4>", "(non communiqué)", "TBD"
+//   - Wire markers leaking through (the chat client prepends [FIELD_TYPED] /
+//     [MAISON_SELECTED] to sensitive typed turns — Gemini sometimes copies a
+//     fragment of the marker into the tool arg, producing values like
+//     "[FIELD@gmail.com" or "[MAISON SELECTED] Italcar"). These crash
+//     Salesforce with INVALID_EMAIL_ADDRESS / invalid phone format.
+// Treat them as MISSING so the per-field validators reject cleanly and the
+// case lands with a warning instead of a Salesforce 400.
 function sanitisePlaceholder(raw: unknown): string {
   const s = String(raw ?? "").trim();
   if (!s) return "";
   if (s.includes("<") || s.includes(">")) return "";
+  // Wire-marker leakage: any value that starts with "[" + uppercase letters
+  // is almost certainly a half-pasted "[FIELD_TYPED]" / "[MAISON_SELECTED]"
+  // marker — never a real name / phone / email / VIN. Drop the whole value.
+  if (/^\[[A-Z_]+/.test(s)) return "";
+  if (/FIELD_?TYPED|MAISON_?SELECTED/i.test(s)) return "";
   if (/STEP_?\d|customer_(phone|email|name|lastname)|collected_by_STEP|_from_session/i.test(s)) return "";
   if (/^\(?non\s+communiqué\)?$/i.test(s)) return "";
   if (/^TBD$/i.test(s)) return "";
@@ -134,6 +143,14 @@ export async function persistAppointment(args: {
       console.log(
         `[salesforce/case] → POST appointment ref=${finalRef} conv=${args.conversationId ?? "n/a"}`
       );
+      // Agent may pass the maison choice as showroomName / showroom / site —
+      // any of those becomes the canonical maison API name we feed into
+      // resolveJeepLeadPicklists() to compute Dealer__c + Showroom__c.
+      const showroomFromInput =
+        (typeof i.showroomName === "string" && i.showroomName.trim()) ||
+        (typeof i.showroom === "string" && i.showroom.trim()) ||
+        (typeof i.site === "string" && i.site.trim()) ||
+        undefined;
       const { payload, response } = await submitJeepApvAppointment({
         fullName: fullNameClean,
         phone: phoneFinal,
@@ -142,6 +159,7 @@ export async function persistAppointment(args: {
         vin: vinFinal,
         interventionType: intervention,
         city: String(i.city ?? ""),
+        showroom: showroomFromInput,
         preferredDate: dateFinal,
         preferredSlot: slot,
         comment: typeof i.comment === "string" ? i.comment : undefined,

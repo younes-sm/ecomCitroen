@@ -1092,10 +1092,25 @@ export async function POST(req: NextRequest) {
           for (let idx = 0; idx < collectedTools.length; idx += 1) {
             const t = collectedTools[idx]!;
             if (t.name === "book_service_appointment") {
+              // The book_service_appointment tool schema doesn't include
+              // showroomName, so the model usually omits it — which means
+              // Dealer__c / Showroom__c picklists would be dropped from the
+              // Case. Recover the maison from message history (the same
+              // regex used elsewhere for Choisir-tap detection) and graft
+              // it onto the tool input so the picklists land.
+              const maisonFromHistory = body.messages
+                .map((m) => m.content)
+                .join(" ")
+                .match(
+                  /((?:Italcar\s+Motorvillage(?:\s+(?:Bouskoura|Maârif|Maarif))?|Autohall(?:\s+Bernoussi)?|Auto\s+Hall(?:\s+Marrakech)?|Orbis\s+Automotive|Fenie\s+Brossette|Maniss\s+Auto|FCA\s*-\s*[^,.\n]+)[^,.\n]{0,40})/i
+                )?.[1]?.trim();
+              const augmentedInput = maisonFromHistory && !t.input.showroomName
+                ? { ...t.input, showroomName: maisonFromHistory }
+                : t.input;
               const result = await persistAppointment({
                 brandSlug: body.brandSlug,
                 conversationId,
-                input: t.input,
+                input: augmentedInput,
               });
               emit(controller, encoder, {
                 type: "apv_confirmation",
