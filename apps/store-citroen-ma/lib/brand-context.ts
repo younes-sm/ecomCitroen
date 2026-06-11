@@ -204,7 +204,7 @@ async function loadFromJsonFallback(slug: string): Promise<FullBrandContext | nu
 
 function pickLocalesForMarket(market: string, slug: string): Locale[] {
   if (slug === "peugeot-ksa") return ["ar-SA", "en-SA"];
-  if (market === "MA") return ["fr-MA", "ar-MA", "darija-MA"];
+  if (market === "MA") return ["fr-MA", "ar-MA", "darija-MA", "en-MA"];
   return ["en-MA"];
 }
 
