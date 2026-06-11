@@ -43,7 +43,7 @@ NO (blocks the tool):
 Send ONE response containing THREE elements, in order:
 
   1. **Pre-tool sentence** — short acknowledgement in the customer's language.
-    - FR: "Parfait, je transmets votre demande à la maison."
+    - FR: "Parfait, je transmets votre demande."
     - Darija: "مزيان، كنصيفط الطلب ديالك ل la maison."
     - AR: "ممتاز، أرسل طلبكم إلى la maison."
     - EN: "Perfect, I'm passing your request to la maison."

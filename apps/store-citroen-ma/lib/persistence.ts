@@ -29,12 +29,18 @@ export async function createConversation(args: {
   ip?: string | null;
   userAgent?: string | null;
 }): Promise<string | null> {
+  // Synthetic id used when Supabase can't issue one (restricted/unreachable).
+  // The booking flow keys all lead-capture on a non-null conversationId, so
+  // returning null here would silently kill the Salesforce push. A local id
+  // keeps the flow alive; Supabase writes that reference it are best-effort
+  // and no-op while the DB is down.
+  const localId = `local-${globalThis.crypto.randomUUID()}`;
   const supa = client();
-  if (!supa) return null;
+  if (!supa) return localId;
   try {
     const { data: brandRow } = await supa.from("brands").select("id").eq("slug", args.brandSlug).single();
     const brandId = (brandRow as unknown as { id?: string } | null)?.id;
-    if (!brandId) return null;
+    if (!brandId) return localId;
     const { data, error } = await (supa.from("conversations") as any)
       .insert({
         brand_id: brandId,
@@ -47,11 +53,11 @@ export async function createConversation(args: {
       })
       .select("id")
       .single();
-    if (error || !data) return null;
+    if (error || !data) return localId;
     return (data as { id: string }).id;
   } catch (err) {
-    console.warn("[persistence] createConversation failed:", (err as Error).message.slice(0, 100));
-    return null;
+    console.warn("[persistence] createConversation failed, using local id:", (err as Error).message.slice(0, 100));
+    return localId;
   }
 }
 
@@ -249,8 +255,6 @@ export async function captureLeadFromBooking(args: {
   notes?: string;
 }): Promise<CaptureLeadResult> {
   const result: CaptureLeadResult = { supabaseOk: false, salesforce: "skipped" };
-  const supa = client();
-  if (!supa) return result;
   // Trim + lightly validate email so a "yes, take it" garbage value doesn't
   // poison the leads table. Also strip wire-marker leakage — Gemini has
   // been observed copying fragments of "[FIELD_TYPED] younes@gmail.com"
@@ -280,49 +284,57 @@ export async function captureLeadFromBooking(args: {
     if (/FIELD_?TYPED|MAISON_?SELECTED/i.test(p)) return "";
     return p;
   })();
-  try {
-    const { data: brandRow } = await supa.from("brands").select("id").eq("slug", args.brandSlug).single();
-    const brandId = (brandRow as unknown as { id?: string } | null)?.id;
-    if (!brandId) return result;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const leadRow: any = {
-      brand_id: brandId,
-      conversation_id: args.conversationId,
-      model_slug: args.modelSlug,
-      first_name: cleanFirstName,
-      phone: cleanPhone,
-      city: args.city ?? null,
-      preferred_slot: args.preferredSlot ?? null,
-      status: "new",
-    };
-    if (cleanEmail) leadRow.email = cleanEmail;
-    if (args.showroomName) leadRow.showroom_name = args.showroomName;
-    if (args.notes) leadRow.notes = args.notes;
-    await (supa.from("leads") as any).insert(leadRow);
+  // Supabase persistence is BEST-EFFORT. Salesforce is the system of record for
+  // Jeep leads, so a restricted/unreachable Supabase (no client, missing brand
+  // row, insert error) must NOT abort before the Salesforce push below. Every
+  // failure path here just leaves supabaseOk=false and falls through.
+  const supa = client();
+  if (supa) {
+    try {
+      const { data: brandRow } = await supa.from("brands").select("id").eq("slug", args.brandSlug).single();
+      const brandId = (brandRow as unknown as { id?: string } | null)?.id;
+      if (brandId) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const leadRow: any = {
+          brand_id: brandId,
+          conversation_id: args.conversationId,
+          model_slug: args.modelSlug,
+          first_name: cleanFirstName,
+          phone: cleanPhone,
+          city: args.city ?? null,
+          preferred_slot: args.preferredSlot ?? null,
+          status: "new",
+        };
+        if (cleanEmail) leadRow.email = cleanEmail;
+        if (args.showroomName) leadRow.showroom_name = args.showroomName;
+        if (args.notes) leadRow.notes = args.notes;
+        await (supa.from("leads") as any).insert(leadRow);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const convUpdate: any = {
-      status: "closed_lead",
-      booked_test_drive: new Date().toISOString(),
-      captured_name: new Date().toISOString(),
-      captured_phone: new Date().toISOString(),
-      captured_city: args.city ? new Date().toISOString() : null,
-      captured_slot: args.preferredSlot ? new Date().toISOString() : null,
-      lead_name: cleanFirstName,
-      lead_phone: cleanPhone,
-      lead_city: args.city ?? null,
-      lead_slot: args.preferredSlot ?? null,
-      lead_model_slug: args.modelSlug,
-      ended_at: new Date().toISOString(),
-    };
-    if (cleanEmail) {
-      convUpdate.lead_email = cleanEmail;
-      convUpdate.captured_email = new Date().toISOString();
-    }
-    if (args.showroomName) convUpdate.lead_showroom = args.showroomName;
-    await (supa.from("conversations") as any).update(convUpdate).eq("id", args.conversationId);
-    result.supabaseOk = true;
-  } catch { /* swallow */ }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const convUpdate: any = {
+          status: "closed_lead",
+          booked_test_drive: new Date().toISOString(),
+          captured_name: new Date().toISOString(),
+          captured_phone: new Date().toISOString(),
+          captured_city: args.city ? new Date().toISOString() : null,
+          captured_slot: args.preferredSlot ? new Date().toISOString() : null,
+          lead_name: cleanFirstName,
+          lead_phone: cleanPhone,
+          lead_city: args.city ?? null,
+          lead_slot: args.preferredSlot ?? null,
+          lead_model_slug: args.modelSlug,
+          ended_at: new Date().toISOString(),
+        };
+        if (cleanEmail) {
+          convUpdate.lead_email = cleanEmail;
+          convUpdate.captured_email = new Date().toISOString();
+        }
+        if (args.showroomName) convUpdate.lead_showroom = args.showroomName;
+        await (supa.from("conversations") as any).update(convUpdate).eq("id", args.conversationId);
+        result.supabaseOk = true;
+      }
+    } catch { /* swallow — Salesforce push below still runs */ }
+  }
 
   // Salesforce sync — Jeep only. AWAITED (not fire-and-forget anymore) so the
   // chat route can detect DUPLICATES_DETECTED and switch the agent's message
