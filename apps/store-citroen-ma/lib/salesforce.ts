@@ -319,14 +319,23 @@ export async function submitJeepTestDriveLead(
 // are POSTed to the Case object (not Lead). We collect every field from the
 // customer in-conversation — there is NO VIN lookup / pre-fill on this path.
 
-// NOTE on naming — the NBS doc and the live Stellantis Case sobject are out
-// of sync. So far the live org has rejected, with INVALID_FIELD:
-//   - Salutation__c  (and the standard Salutation)
-// Each rejection means the field isn't provisioned on Case in this Salesforce
-// org. We drop them as they fail and document the gap; restoring them later
-// requires the NBS admin team to add the columns.
-// Lead_Type__c IS provisioned (restricted picklist: "Particulier" /
-// "Professionnel"). APV has no B2B/B2C question, so we default to Particulier.
+// NOTE on the "type de client" field — UNRESOLVED, blocked on a Salesforce
+// admin change. Verified against PROD (stellantis-e.my.salesforce.com) via the
+// Case `describe` API as the integration user (integration@stellantis.com):
+//   - Lead_Type__c       — the NBS doc's name. NOT visible to the integration
+//                          user at all. A POST returns INVALID_FIELD
+//                          "No such column 'Lead_Type__c' on sobject of type
+//                          Case". Either it isn't provisioned, or the
+//                          integration user's profile lacks field-level
+//                          security on it.
+//   - Type_de_client__c  — DOES exist on Case, but is read-only for this user
+//                          (createable=false, updateable=false) — cannot be
+//                          written via the API.
+// So NEITHER can be written today. We send no client-type field; APV / SALES
+// work without it. To carry "Particulier", the NBS/Stellantis admin must
+// either grant the integration user create-FLS on Lead_Type__c (then re-add it
+// here) or make Type_de_client__c writable. See also Salutation__c, also
+// rejected with INVALID_FIELD on this org.
 export interface CasePayload {
   SuppliedName: string;
   SuppliedPhone: string;
@@ -343,9 +352,6 @@ export interface CasePayload {
   RecordTypeId?: string;
   Numero_de_chassis__c: string;
   Date_de_RDV__c?: string;
-  // Restricted picklist — "Particulier" | "Professionnel". APV defaults to
-  // Particulier (no B2B/B2C question in the after-sales flow).
-  Lead_Type__c?: "Particulier" | "Professionnel";
   // Picklist fields (Stellantis PROD spec — values from lib/salesforce-
   // picklists.ts). Optional — resolveJeepLeadPicklists returns undefined
   // for unresolvable values and the caller omits them rather than send a
@@ -416,8 +422,6 @@ export type JeepApvAppointmentInput = {
   preferredDate: string;
   preferredSlot: "morning" | "afternoon";
   comment?: string;
-  /** Restricted picklist on Case — defaults to "Particulier" when omitted. */
-  leadType?: "Particulier" | "Professionnel";
   refNumber: string;
   conversationId?: string | null;
 };
@@ -433,8 +437,6 @@ export type JeepApvComplaintInput = {
   serviceDate?: string | null;
   reason: string;
   attachmentUrl?: string;
-  /** Restricted picklist on Case — defaults to "Particulier" when omitted. */
-  leadType?: "Particulier" | "Professionnel";
   refNumber: string;
   conversationId?: string | null;
 };
@@ -512,7 +514,6 @@ export function buildJeepApvAppointmentCase(input: JeepApvAppointmentInput): Cas
     RecordTypeId: RECORD_TYPE_RDV_SAV,
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
     Date_de_RDV__c: toAppointmentDateTime(input.preferredDate, input.preferredSlot),
-    Lead_Type__c: input.leadType ?? "Particulier",
   };
   if (picklists.Marque_d_interet__c) payload.Marque_d_interet__c = picklists.Marque_d_interet__c;
   if (picklists.Serie_Modele__c)     payload.Serie_Modele__c     = picklists.Serie_Modele__c;
@@ -556,7 +557,6 @@ export function buildJeepApvComplaintCase(input: JeepApvComplaintInput): CasePay
     Type: "Réclamation",
     RecordTypeId: RECORD_TYPE_RECLAMATION_SAV,
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
-    Lead_Type__c: input.leadType ?? "Particulier",
   };
   if (picklists.Marque_d_interet__c) payload.Marque_d_interet__c = picklists.Marque_d_interet__c;
   if (picklists.Serie_Modele__c)     payload.Serie_Modele__c     = picklists.Serie_Modele__c;
