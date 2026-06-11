@@ -322,11 +322,11 @@ export async function submitJeepTestDriveLead(
 // NOTE on naming — the NBS doc and the live Stellantis Case sobject are out
 // of sync. So far the live org has rejected, with INVALID_FIELD:
 //   - Salutation__c  (and the standard Salutation)
-//   - Lead_Type__c
 // Each rejection means the field isn't provisioned on Case in this Salesforce
 // org. We drop them as they fail and document the gap; restoring them later
-// requires the NBS admin team to add the columns. The Particulier/Professionnel
-// distinction (formerly Lead_Type__c) is stuffed into the Description for now.
+// requires the NBS admin team to add the columns.
+// Lead_Type__c IS provisioned (restricted picklist: "Particulier" /
+// "Professionnel"). APV has no B2B/B2C question, so we default to Particulier.
 export interface CasePayload {
   SuppliedName: string;
   SuppliedPhone: string;
@@ -343,6 +343,9 @@ export interface CasePayload {
   RecordTypeId?: string;
   Numero_de_chassis__c: string;
   Date_de_RDV__c?: string;
+  // Restricted picklist — "Particulier" | "Professionnel". APV defaults to
+  // Particulier (no B2B/B2C question in the after-sales flow).
+  Lead_Type__c?: "Particulier" | "Professionnel";
   // Picklist fields (Stellantis PROD spec — values from lib/salesforce-
   // picklists.ts). Optional — resolveJeepLeadPicklists returns undefined
   // for unresolvable values and the caller omits them rather than send a
@@ -413,6 +416,8 @@ export type JeepApvAppointmentInput = {
   preferredDate: string;
   preferredSlot: "morning" | "afternoon";
   comment?: string;
+  /** Restricted picklist on Case — defaults to "Particulier" when omitted. */
+  leadType?: "Particulier" | "Professionnel";
   refNumber: string;
   conversationId?: string | null;
 };
@@ -428,6 +433,8 @@ export type JeepApvComplaintInput = {
   serviceDate?: string | null;
   reason: string;
   attachmentUrl?: string;
+  /** Restricted picklist on Case — defaults to "Particulier" when omitted. */
+  leadType?: "Particulier" | "Professionnel";
   refNumber: string;
   conversationId?: string | null;
 };
@@ -505,6 +512,7 @@ export function buildJeepApvAppointmentCase(input: JeepApvAppointmentInput): Cas
     RecordTypeId: RECORD_TYPE_RDV_SAV,
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
     Date_de_RDV__c: toAppointmentDateTime(input.preferredDate, input.preferredSlot),
+    Lead_Type__c: input.leadType ?? "Particulier",
   };
   if (picklists.Marque_d_interet__c) payload.Marque_d_interet__c = picklists.Marque_d_interet__c;
   if (picklists.Serie_Modele__c)     payload.Serie_Modele__c     = picklists.Serie_Modele__c;
@@ -548,6 +556,7 @@ export function buildJeepApvComplaintCase(input: JeepApvComplaintInput): CasePay
     Type: "Réclamation",
     RecordTypeId: RECORD_TYPE_RECLAMATION_SAV,
     Numero_de_chassis__c: input.vin.trim().toUpperCase(),
+    Lead_Type__c: input.leadType ?? "Particulier",
   };
   if (picklists.Marque_d_interet__c) payload.Marque_d_interet__c = picklists.Marque_d_interet__c;
   if (picklists.Serie_Modele__c)     payload.Serie_Modele__c     = picklists.Serie_Modele__c;

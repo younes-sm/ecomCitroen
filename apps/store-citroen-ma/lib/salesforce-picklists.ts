@@ -313,19 +313,61 @@ export const SHOWROOM_BRANDS: Record<ShowroomLabel, MarqueLabel[]> = {
   "Sopriam Marjane Ain Sbaa - KMG AUTO": ["Peugeot", "Citroen"],
 };
 
-/** Lookup helper: take a showroom Label (or the API Name itself — both
- *  work for FCA entries since they're identical) and return the API Name
- *  to send in the request body. Returns undefined if not in the picklist. */
+/** Short, conversational forms of maison names that the chatbot extracts
+ *  from transcripts ("Italcar Motorvillage Bouskoura", "Autohall Bernoussi")
+ *  mapped to the canonical Showroom__c API Name. The chat prompt and the
+ *  customer's natural speech use these short forms; the SF picklist requires
+ *  the long "FCA - CITY - OPERATOR" form. This is the bridge. */
+const SHOWROOM_SHORT_FORM_ALIASES: Record<string, ShowroomLabel> = {
+  // Casablanca
+  "italcar motorvillage bouskoura":    "FCA - CASABLANCA - ITALCAR MOTORVILLAGE",
+  "italcar motorvillage":              "FCA - CASABLANCA - ITALCAR MOTORVILLAGE",
+  "bouskoura":                         "FCA - CASABLANCA - ITALCAR MOTORVILLAGE",
+  "italcar motorvillage maârif":       "FCA - CASABLANCA MAARIF - ITALCAR MOTORVILLAGE",
+  "italcar motorvillage maarif":       "FCA - CASABLANCA MAARIF - ITALCAR MOTORVILLAGE",
+  "maârif":                            "FCA - CASABLANCA MAARIF - ITALCAR MOTORVILLAGE",
+  "maarif":                            "FCA - CASABLANCA MAARIF - ITALCAR MOTORVILLAGE",
+  "autohall bernoussi":                "FCA - CASABLANCA - AUTOHALL BERNOUSSI",
+  "bernoussi":                         "FCA - CASABLANCA - AUTOHALL BERNOUSSI",
+  // Marrakech
+  "auto hall marrakech":               "FCA - MARRAKECH - AUTOHALL CENTRE VILLE",
+  "autohall centre ville":             "FCA - MARRAKECH - AUTOHALL CENTRE VILLE",
+  "centre ville":                      "FCA - MARRAKECH - AUTOHALL CENTRE VILLE",
+  "maniss auto":                       "FCA - MARRAKECH - MANISS AUTO ROUTE CASABLANCA",
+  "maniss auto route casablanca":      "FCA - MARRAKECH - MANISS AUTO ROUTE CASABLANCA",
+  // Single-maison cities
+  "fenie brossette":                   "FCA - AGADIR - FENIE BROSSETTE",
+  "auto hall fes":                     "FCA - FES - AUTO HALL",
+  "auto hall kenitra":                 "FCA - KENITRA - AUTO HALL",
+  "auto hall oujda":                   "FCA - OUJDA - AUTO HALL",
+  "orbis automotive rabat":            "FCA - RABAT - ORBIS AUTOMOTIVE",
+  "orbis automotive tanger":           "FCA - TANGER - ORBIS AUTOMOTIVE",
+};
+
+/** Lookup helper: take a showroom Label, an API Name, OR a conversational
+ *  short form ("Autohall Bernoussi", "Italcar Motorvillage Bouskoura") and
+ *  return the canonical Showroom__c API Name. Returns undefined when no
+ *  match — caller should omit Showroom__c / Dealer__c rather than send a
+ *  bad picklist value. */
 export function getShowroomApiName(labelOrApiName: string): string | undefined {
   const trimmed = labelOrApiName.trim();
-  // First try a direct label lookup.
+  // 1. Direct label match.
   if (trimmed in SHOWROOM_API_NAMES) {
     return SHOWROOM_API_NAMES[trimmed as ShowroomLabel];
   }
-  // Then check if the input IS already an API Name (covers the case where
-  // upstream code passes the canonical "FCA - …" string directly).
+  // 2. Direct API-name match (covers upstream code that passes the long form).
   for (const apiName of Object.values(SHOWROOM_API_NAMES)) {
     if (apiName === trimmed) return apiName;
+  }
+  // 3. Short conversational form ("Autohall Bernoussi" → "FCA - … - AUTOHALL BERNOUSSI").
+  const aliasKey = trimmed.toLowerCase();
+  const aliased = SHOWROOM_SHORT_FORM_ALIASES[aliasKey];
+  if (aliased) return SHOWROOM_API_NAMES[aliased];
+  // 4. Loose fuzzy match — if the input CONTAINS one of the short-form keys
+  //    as a substring, use it. Catches "Autohall Bernoussi Parfait" leftovers
+  //    even when the regex over-captures.
+  for (const [key, label] of Object.entries(SHOWROOM_SHORT_FORM_ALIASES)) {
+    if (aliasKey.includes(key)) return SHOWROOM_API_NAMES[label];
   }
   return undefined;
 }

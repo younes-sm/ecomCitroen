@@ -54,10 +54,20 @@ export async function getBrandContext(slug: string): Promise<FullBrandContext | 
       .eq("enabled", true)
       .single();
     if (bErr || !brandRow) {
-      // Network / query error: serve stale cache rather than 404.
+      // Query error or missing row (e.g. Supabase restricted/paused, or the
+      // brand was de-seeded). Degrade gracefully instead of 404-ing: stale
+      // cache first, then local JSON, then null. Mirrors the catch block so a
+      // restricted DB that *answers* with an error behaves like an unreachable one.
       if (cached) {
         console.warn(`[brand-context] db error, serving stale cache for ${slug}:`, bErr?.message?.slice(0, 80));
         return cached.ctx;
+      }
+      const fallback = await loadFromJsonFallback(slug);
+      if (fallback) {
+        const overridden = applyOverrides(fallback);
+        console.warn(`[brand-context] db error, serving JSON fallback for ${slug}:`, bErr?.message?.slice(0, 80));
+        brandCache.set(slug, { ctx: overridden, cachedAt: Date.now() });
+        return overridden;
       }
       return null;
     }

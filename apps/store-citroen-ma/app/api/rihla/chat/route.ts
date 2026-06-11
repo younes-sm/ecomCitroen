@@ -1098,12 +1098,17 @@ export async function POST(req: NextRequest) {
               // Case. Recover the maison from message history (the same
               // regex used elsewhere for Choisir-tap detection) and graft
               // it onto the tool input so the picklists land.
+              // Match short conversational forms only — no trailing
+              // wildcard, so words like "Parfait" / "Quelle" that follow
+              // the maison name in the transcript are NOT captured.
+              // getShowroomApiName() resolves these to the canonical
+              // Showroom__c API Name via the alias table.
               const maisonFromHistory = body.messages
                 .map((m) => m.content)
                 .join(" ")
                 .match(
-                  /((?:Italcar\s+Motorvillage(?:\s+(?:Bouskoura|Maârif|Maarif))?|Autohall(?:\s+Bernoussi)?|Auto\s+Hall(?:\s+Marrakech)?|Orbis\s+Automotive|Fenie\s+Brossette|Maniss\s+Auto|FCA\s*-\s*[^,.\n]+)[^,.\n]{0,40})/i
-                )?.[1]?.trim();
+                  /Italcar\s+Motorvillage(?:\s+(?:Bouskoura|Maârif|Maarif))?|Autohall(?:\s+Bernoussi)?|Auto\s+Hall(?:\s+(?:Marrakech|Centre\s+Ville))?|Orbis\s+Automotive|Fenie\s+Brossette|Maniss\s+Auto|FCA\s*-\s*[A-Z][A-Z\s-]+- [A-Z][A-Z\s]+/i
+                )?.[0]?.trim();
               const augmentedInput = maisonFromHistory && !t.input.showroomName
                 ? { ...t.input, showroomName: maisonFromHistory }
                 : t.input;
