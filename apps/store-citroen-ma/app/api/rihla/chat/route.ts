@@ -1666,12 +1666,12 @@ export async function POST(req: NextRequest) {
                 : "";
               const successMsg =
                 localeKey === "ar"
-                  ? `تم استلام معلوماتكم بنجاح.${refSuffix} سيتصل بكم un commercial من la maison Jeep في أقرب وقت لتأكيد الموعد. هل هناك شيء آخر يمكنني مساعدتكم به ؟`
+                  ? `شكرًا ! تم استلام طلبكم بنجاح.${refSuffix} سيتواصل معكم أحد مستشاري Jeep في أقرب وقت لتأكيد الموعد. هل هناك شيء آخر يمكنني مساعدتكم به ؟`
                   : localeKey === "darija"
-                  ? `تسجلات المعلومات ديالك بنجاح.${refSuffix} commercial من la maison Jeep غيعاود ليك بزربة باش يأكد الموعد. واش كاينة شي حاجة أخرى نقدر نعاونك بيها ؟`
+                  ? `شكرا ! الطلب ديالك تسجل بنجاح.${refSuffix} commercial ديال Jeep غيتواصل معاك بزربة باش يأكد الموعد. واش كاينة شي حاجة أخرى نقدر نعاونك بيها ؟`
                   : localeKey === "en"
-                  ? `Your request has been successfully registered.${refSuffix} A Jeep commercial will reach out shortly to confirm the slot. Anything else I can help with?`
-                  : `Votre demande a bien été enregistrée.${refSuffix} Un commercial de la maison Jeep va vous recontacter pour confirmer le créneau. Y a-t-il autre chose dont vous avez besoin ?`;
+                  ? `Thank you! Your request has been successfully registered.${refSuffix} A Jeep advisor will contact you shortly to confirm the slot. Anything else I can help with?`
+                  : `Merci ! Votre demande a bien été enregistrée.${refSuffix} Un commercial Jeep vous recontactera pour confirmer le créneau. Y a-t-il autre chose dont vous avez besoin ?`;
               emit(controller, encoder, { type: "text", text: successMsg });
               collectedText.push(successMsg);
             }
