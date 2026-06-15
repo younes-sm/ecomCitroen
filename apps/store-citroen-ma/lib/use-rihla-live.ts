@@ -266,6 +266,12 @@ export function useRihlaLive(
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const playQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
+  // Half-duplex gate. True from the first audio chunk of a model turn until
+  // playback fully drains. While true, the mic processor drops outgoing frames
+  // so the agent's own voice (which browser AEC does NOT cancel for Web Audio
+  // output) can't echo back into Gemini's VAD and trigger a duplicate/looping
+  // turn — the "agent repeats itself without letting me respond" bug.
+  const agentSpeakingRef = useRef(false);
   const shouldDisconnectRef = useRef(false);
   // Guards against connect() running twice concurrently. React StrictMode
   // double-invokes effects in dev, and a re-render can re-fire the auto-
@@ -343,6 +349,9 @@ export function useRihlaLive(
 
   const enqueueAudio = useCallback(
     (base64: string) => {
+      // The model is producing speech for this turn — close the mic gate so we
+      // don't feed its own audio back to Gemini.
+      agentSpeakingRef.current = true;
       const raw = atob(base64);
       const pcm = new Int16Array(raw.length / 2);
       for (let i = 0; i < pcm.length; i++) {
@@ -481,6 +490,9 @@ export function useRihlaLive(
                 shouldDisconnectRef.current = false;
                 disconnectRef.current?.();
               } else {
+                // Reopen the mic only after a short tail delay so the speaker's
+                // decay/reverb doesn't get captured and re-trigger the agent.
+                setTimeout(() => { agentSpeakingRef.current = false; }, 250);
                 updateState("listening");
               }
             } else {
@@ -540,6 +552,10 @@ export function useRihlaLive(
           console.log(`%c[voice] 🎙️ microphone CAPTURING — audio flowing to Gemini (ctx.state=${ctx.state})`, "color:#22c55e;font-weight:bold");
         }
         if (ws.readyState !== WebSocket.OPEN) return;
+        // Half-duplex: while the agent is speaking, don't forward mic audio.
+        // Otherwise the agent's voice leaking through the speaker is captured
+        // and Gemini treats it as a new user turn → the agent repeats itself.
+        if (agentSpeakingRef.current) return;
         const input = e.inputBuffer.getChannelData(0);
         const pcm16 = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
@@ -607,6 +623,7 @@ export function useRihlaLive(
     // backstop fired) and silently disconnect mid-greeting.
     shouldDisconnectRef.current = false;
     isPlayingRef.current = false;
+    agentSpeakingRef.current = false;
     playQueueRef.current = [];
     userBufferRef.current = "";
     assistantBufferRef.current = "";
@@ -836,6 +853,7 @@ export function useRihlaLive(
     stopMic();
     playQueueRef.current = [];
     isPlayingRef.current = false;
+    agentSpeakingRef.current = false;
     shouldDisconnectRef.current = false;
     connectInFlightRef.current = false;
     assistantBufferRef.current = "";
