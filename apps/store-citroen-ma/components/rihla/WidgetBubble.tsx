@@ -23,6 +23,7 @@ import {
   type WidgetBrand,
 } from "@/lib/rihla-actions";
 import { useRihlaLive, type LiveToolCall } from "@/lib/use-rihla-live";
+import { validatePhone } from "@/lib/phone";
 import { LanguagePicker, getLangConfig, getOpeningGreeting, type VoiceLang } from "@/components/rihla/LanguagePicker";
 import { ModePicker, type Mode } from "@/components/rihla/ModePicker";
 import { CallView } from "@/components/rihla/CallView";
@@ -69,6 +70,18 @@ type Props = {
 type Stage = "lang" | "mode" | "chat";
 
 const STORAGE_KEY = (slug: string) => `widget-state-${slug}`;
+
+// Localized "that's not a valid mobile number" correction, shown when the
+// customer types an invalid phone for the field the agent asked for.
+function phoneErrorText(lang: VoiceLang | null, market: "MA" | "SA"): string {
+  if (market === "SA") {
+    if (lang === "en") return "Please enter a valid Saudi mobile number: 05 followed by 8 digits, or +966 5 and 8 digits.";
+    return "الرجاء إدخال رقم جوال سعودي صحيح: 05 متبوعًا بـ 8 أرقام، أو ‎+966‎ 5 و8 أرقام.";
+  }
+  if (lang === "en") return "Please enter a valid Moroccan mobile number: 06 or 07 followed by 8 digits, or +212 6/7 and 8 digits.";
+  if (lang === "ar" || lang === "darija") return "الرجاء إدخال رقم هاتف مغربي صحيح: 06 أو 07 متبوعًا بـ 8 أرقام، أو ‎+212‎ 6 أو 7 و8 أرقام.";
+  return "Veuillez saisir un numéro de mobile marocain valide : 06 ou 07 suivi de 8 chiffres, ou +212 6/7 et 8 chiffres.";
+}
 
 function readStored(slug: string): { lang: VoiceLang | null; mode: Mode | null } {
   if (typeof window === "undefined") return { lang: null, mode: null };
@@ -647,9 +660,28 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   const handleSend = useCallback(() => {
     const text = input.trim();
     if (!text || isStreaming) return;
+    // Phone validation: when the agent asked for a mobile number, reject an
+    // invalid one client-side so a bad value (e.g. "08100299" — wrong prefix,
+    // 8 digits) never enters the lead. Echo what they typed + a localized
+    // correction, and KEEP the phone request so the next input is re-validated.
+    // Only validate when the reply actually looks like a number attempt (≥5
+    // digits) — a conversational reply like "tu l'as déjà" passes through to
+    // the agent instead of triggering a format error.
+    if (typeRequest?.kind === "phone" && (text.match(/\d/g) ?? []).length >= 5) {
+      const market: "MA" | "SA" = brand.slug.includes("ksa") ? "SA" : "MA";
+      if (!validatePhone(text, market).ok) {
+        setInput("");
+        setMessages((m) => [
+          ...m,
+          { kind: "text", role: "user", text },
+          { kind: "text", role: "assistant", text: phoneErrorText(voiceLang, market) },
+        ]);
+        return;
+      }
+    }
     setInput("");
     void sendTextMessage(text);
-  }, [input, isStreaming, sendTextMessage]);
+  }, [input, isStreaming, sendTextMessage, typeRequest, brand.slug, voiceLang]);
 
   const accent = brand.primaryColor ?? "#0c0c10";
 
