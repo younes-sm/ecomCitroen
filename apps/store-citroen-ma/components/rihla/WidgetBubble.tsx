@@ -88,8 +88,74 @@ function writeStored(slug: string, lang: VoiceLang | null, mode: Mode | null) {
   else localStorage.setItem(STORAGE_KEY(slug), JSON.stringify({ lang, mode }));
 }
 
+// ── Conversation persistence ────────────────────────────────────────────────
+// Keeps the chat transcript alive across FULL-PAGE navigations — when the
+// widget iframe sits in a multi-page site footer, every navigation destroys and
+// recreates the iframe, wiping React state. We snapshot the conversation to the
+// iframe-origin localStorage (which persists within the same top-level site) and
+// restore it on mount. A TTL drops stale sessions so a returning visitor starts
+// fresh rather than resuming a day-old chat.
+const CONV_KEY = (slug: string) => `widget-conv-${slug}`;
+const CONV_TTL_MS = 60 * 60 * 1000; // 60 minutes of inactivity.
+
+type StoredConv = {
+  lang: VoiceLang | null;
+  messages: Msg[];
+  conversationId: string | null;
+  open: boolean;
+  savedAt: number;
+};
+
+function readStoredConv(slug: string): StoredConv | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(CONV_KEY(slug));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredConv;
+    if (!parsed?.savedAt || Date.now() - parsed.savedAt > CONV_TTL_MS) {
+      localStorage.removeItem(CONV_KEY(slug));
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredConv(
+  slug: string,
+  data: { lang: VoiceLang | null; messages: Msg[]; conversationId: string | null; open: boolean }
+) {
+  if (typeof window === "undefined") return;
+  try {
+    // An empty / greeting-only transcript isn't worth restoring — clear it so a
+    // fresh visit shows the normal opening.
+    const meaningful = data.messages.some((m) => m.role === "user");
+    if (!meaningful) {
+      localStorage.removeItem(CONV_KEY(slug));
+      return;
+    }
+    localStorage.setItem(CONV_KEY(slug), JSON.stringify({ ...data, savedAt: Date.now() }));
+  } catch {
+    /* quota exceeded / serialization failure — non-fatal */
+  }
+}
+
 export function WidgetBubble({ brand, availableLangs, embedded = false, postSizeToParent = false }: Props) {
-  const [open, setOpen] = useState(embedded);
+  // Restore a prior CHAT conversation once on mount (survives full-page
+  // navigation when the widget iframe lives in a multi-page footer). Voice
+  // sessions are intentionally NOT restored — a live WebSocket call can't
+  // resume across a page load — so a restored session always reopens as chat.
+  const initialConvRef = useRef<StoredConv | null>(null);
+  const initRanRef = useRef(false);
+  if (!initRanRef.current) {
+    initRanRef.current = true;
+    initialConvRef.current = readStoredConv(brand.slug);
+  }
+  const restoredConv = initialConvRef.current;
+  const hasRestoredConv = !!restoredConv && restoredConv.messages.length > 0;
+
+  const [open, setOpen] = useState(embedded || (hasRestoredConv && !!restoredConv?.open));
 
   // Iframe-embed handshake: tell the parent window whether the panel is open
   // (full size, ~380×620) or collapsed to a FAB (~96×96). The embed.js snippet
@@ -111,8 +177,11 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const initial = readStored(brand.slug);
-  const [voiceLang, setVoiceLang] = useState<VoiceLang | null>(initial.lang);
-  const [mode, setMode] = useState<Mode | null>(initial.mode);
+  const [voiceLang, setVoiceLang] = useState<VoiceLang | null>(
+    hasRestoredConv ? (restoredConv!.lang ?? initial.lang) : initial.lang
+  );
+  // A restored conversation always reopens in CHAT view (voice can't resume).
+  const [mode, setMode] = useState<Mode | null>(hasRestoredConv ? "chat" : initial.mode);
 
   // True from the moment the user ends the call (red button / back) until
   // they explicitly pick a mode again. Blocks the voice auto-start effect
@@ -123,12 +192,26 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   const langConfig = voiceLang ? getLangConfig(voiceLang) : null;
   const apiLocale = voiceLang === "darija" ? "ar" : voiceLang ?? "fr";
 
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const [messages, setMessages] = useState<Msg[]>(hasRestoredConv ? restoredConv!.messages : []);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef(messages);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
-  const conversationIdRef = useRef<string | null>(null);
+  const conversationIdRef = useRef<string | null>(hasRestoredConv ? (restoredConv!.conversationId ?? null) : null);
+
+  // Snapshot the CHAT conversation so it survives a footer-iframe page reload.
+  // Chat mode only — voice transcripts are not persisted. Keyed on messages +
+  // open; reads the latest conversationId at save time. writeStoredConv no-ops
+  // (and clears) for greeting-only transcripts.
+  useEffect(() => {
+    if (mode !== "chat") return;
+    writeStoredConv(brand.slug, {
+      lang: voiceLang,
+      messages,
+      conversationId: conversationIdRef.current,
+      open,
+    });
+  }, [messages, open, mode, voiceLang, brand.slug]);
 
   // Inject the assistant greeting on chat stage entry (or after mode pick).
   // For brands that have APV enabled (jeep-ma) the greeting lists all four
