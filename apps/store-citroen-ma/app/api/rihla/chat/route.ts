@@ -770,6 +770,16 @@ async function streamWithGemini(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       toolConfig: toolConfig as any,
       temperature: forced ? 0.2 : 0.7,
+      // Disable "thinking" for this fast, guided sales/APV chat. With thinking
+      // on, gemini-2.5-flash sometimes spends the whole turn on internal
+      // reasoning and emits NO visible text/tool — the empty turn that produced
+      // the "Comment puis-je vous aider à partir de là ?" reply after a terse
+      // "oui". The flow logic already lives in the system prompt, so chain-of-
+      // thought adds latency + cost (≈290 thinking tokens even for "hi") with
+      // no quality gain here. Flash models accept budget 0; the retry-on-empty
+      // path remains as a backstop. (Reasoning-only models would reject 0, but
+      // RIHLA_CHAT_MODEL is always a flash model for this chat.)
+      thinkingConfig: { thinkingBudget: 0 },
     },
   });
 
