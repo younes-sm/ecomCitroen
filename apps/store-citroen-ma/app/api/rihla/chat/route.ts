@@ -1029,6 +1029,22 @@ export async function POST(req: NextRequest) {
         (body.sessionContext?.searchedCities ?? []).map((c) => c.toLowerCase().trim())
       );
 
+      // CNDP-confirmation turn: the customer just said YES to the consent
+      // question. The only correct next output is a booking tool — never a
+      // showroom re-list. The model sometimes re-fires find_showrooms here
+      // (the "shows the showrooms again after I confirm" bug); the booking
+      // still lands via the stalled-booking recovery below, but the customer
+      // shouldn't see the cards. We suppress find_showrooms on this turn and
+      // let that recovery emit the real confirmation.
+      const cndpConfirmTurn = (() => {
+        const lastAssistant = [...body.messages].reverse().find((m) => m.role === "assistant");
+        if (!lastAssistant || !lastUserMsg) return false;
+        const aff = /\b(oui|yes|ok|okay|d['']?accord|je\s+confirme|confirme|j['']?accepte|accepte)\b|نعم|واخا|اوكي|موافق|صافي|تمام/i.test(lastUserMsg.content);
+        const neg = /\b(non|no|nope)\b|لا|ماشي/i.test(lastUserMsg.content);
+        const cndp = /(09[-\s–]?08|loi\s+09|conform[ée]ment|stellantis\s+maroc|protection\s+des\s+donn[ée]es|vous\s+confirmez|توافقون|الموافقة|البيانات\s+الشخصية|do\s+you\s+confirm|data[-\s]?protection)/i.test(lastAssistant.content);
+        return aff && !neg && cndp;
+      })();
+
       // Wrap the controller so we can also (1) accumulate everything for
       // persistence and (2) intercept duplicate UI-card tool emits.
       const tap = new Proxy(controller, {
@@ -1057,6 +1073,10 @@ export async function POST(req: NextRequest) {
                   // was already shown earlier in the conversation.
                   if (ev.type === "tool" && ev.name === "find_showrooms") {
                     const city = String(ev.input?.city ?? "").toLowerCase().trim();
+                    if (cndpConfirmTurn) {
+                      console.log(`[rihla/chat] suppressed find_showrooms(${city}) — CNDP just confirmed, booking is the only valid output`);
+                      return;
+                    }
                     if (maisonAlreadySelected) {
                       console.log(`[rihla/chat] suppressed find_showrooms(${city}) — maison already selected this conversation`);
                       return;
