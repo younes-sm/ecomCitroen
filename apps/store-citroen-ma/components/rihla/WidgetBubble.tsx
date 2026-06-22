@@ -71,6 +71,21 @@ type Stage = "lang" | "mode" | "chat";
 
 const STORAGE_KEY = (slug: string) => `widget-state-${slug}`;
 
+// Defensive: strip leaked tool-call syntax from assistant text so a malformed
+// emission (e.g. the model writing `request_input({"field":"phone"})` or a bare
+// `{"field":"phone"}` / dangling `"phone"}` as text instead of a structured
+// function call) never renders as a chat bubble. Conservative — requires the
+// parens/braces that normal prose never has, so real replies pass untouched.
+const TOOL_LEAK_CALL_RE = /\b(?:request_input|find_showrooms|show_model_image|show_model_video|configure_car|open_model|book_test_drive|book_showroom_visit|book_service_appointment|submit_complaint|calculate_financing|open_brand_page|open_financing|open_dealers|start_reservation|lookup_vin|end_call)\s*\([^)]*\)/gi;
+function stripToolLeak(s: string): string {
+  let out = s.replace(TOOL_LEAK_CALL_RE, "");
+  // Bare argument JSON objects: {"field":"phone"} / {"slug":"compass", ...}
+  out = out.replace(/\{\s*"[a-zA-Z_]+"\s*:\s*"[^"{}]*"(?:\s*,\s*"[a-zA-Z_]+"\s*:\s*"[^"{}]*")*\s*\}/g, "");
+  // A bubble that is ONLY a dangling fragment such as `"phone"}` or `field":"phone"}`.
+  if (/^\s*"?[a-zA-Z_]+"?\s*:?\s*"?[a-zA-Z_]*"?\s*[}\])]+\s*$/.test(out)) out = "";
+  return out.trim();
+}
+
 // Localized "that's not a valid mobile number" correction, shown when the
 // customer types an invalid phone for the field the agent asked for.
 function phoneErrorText(lang: VoiceLang | null, market: "MA" | "SA"): string {
@@ -581,18 +596,21 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
             conversationIdRef.current = ev.id;
           } else if (ev.type === "text") {
             textAcc += ev.text;
-            setMessages((m) => {
-              const copy = [...m];
-              const last = copy[copy.length - 1];
-              if (assistantStarted && last?.kind === "text" && last.role === "assistant") {
-                copy[copy.length - 1] = { ...last, text: textAcc };
-              } else {
-                // First text token — create the assistant bubble now.
-                copy.push({ kind: "text", role: "assistant", text: textAcc, tools: [] });
-              }
-              return copy;
-            });
-            assistantStarted = true;
+            const cleanText = stripToolLeak(textAcc);
+            if (cleanText) {
+              setMessages((m) => {
+                const copy = [...m];
+                const last = copy[copy.length - 1];
+                if (assistantStarted && last?.kind === "text" && last.role === "assistant") {
+                  copy[copy.length - 1] = { ...last, text: cleanText };
+                } else {
+                  // First (non-leak) text token — create the assistant bubble now.
+                  copy.push({ kind: "text", role: "assistant", text: cleanText, tools: [] });
+                }
+                return copy;
+              });
+              assistantStarted = true;
+            }
             // Pop the right keyboard affordance when the agent asks for a
             // sensitive field (name / phone / email / VIN). For VIN, this
             // also surfaces the carte-grise camera + upload buttons above the
