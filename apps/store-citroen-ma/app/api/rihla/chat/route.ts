@@ -731,6 +731,11 @@ function emit(
 
 /* ─────────────────────────── Gemini handler ─────────────────────────── */
 
+// Chat model is env-overridable so prod can move to a stronger/stable model
+// (e.g. RIHLA_CHAT_MODEL=gemini-3.1-flash) without a code change. Defaults to
+// the current stable model so behaviour is unchanged when the var is unset.
+const RIHLA_CHAT_MODEL = process.env.RIHLA_CHAT_MODEL || "gemini-2.5-flash";
+
 async function streamWithGemini(
   controller: ReadableStreamDefaultController<Uint8Array>,
   encoder: TextEncoder,
@@ -757,7 +762,7 @@ async function streamWithGemini(
     ? { functionCallingConfig: { mode: "ANY", allowedFunctionNames: options!.forceFunctionNames } }
     : { functionCallingConfig: { mode: "AUTO" } };
   const response = await ai.models.generateContentStream({
-    model: "gemini-2.5-flash",
+    model: RIHLA_CHAT_MODEL,
     contents,
     config: {
       systemInstruction,
@@ -1678,9 +1683,38 @@ export async function POST(req: NextRequest) {
             stallHandled = true;
           }
 
+        // Retry-on-empty — gemini-2.5-flash intermittently returns a fully
+        // empty turn (no text, no tool), most often when the customer sends a
+        // terse affirmation ("oui" / "نعم" / "yes") right after a turn whose
+        // CTA was dropped after a show_model_image call. Instead of dead-ending
+        // into the generic fallback, ask the model ONCE more with an explicit
+        // nudge to produce a concrete next step. This is the root cause of the
+        // "Comment puis-je vous aider à partir de là ?" reply customers hit on
+        // prod right after saying "oui" to a recommendation.
+        if (!stallHandled && !emittedText && !emittedVisibleTool && provider === "gemini") {
+          const nudgeLang = localeKey === "ar" ? "Modern Standard Arabic"
+            : localeKey === "darija" ? "Moroccan Darija"
+            : localeKey === "en" ? "English"
+            : "French";
+          const emptyNudge = `\n\nYOUR PREVIOUS RESPONSE WAS EMPTY — that is a failure. The customer is waiting. Produce ONE short, natural reply in ${nudgeLang} that moves the conversation forward based on the customer's LAST message. If the customer just AGREED (e.g. "oui" / "yes" / "نعم" / "واخا") to a test drive, showroom visit, or service appointment, START data collection now: ask for their first name AND call request_input(field="name") in the same turn. Never return another empty turn.`;
+          try {
+            console.warn(`[rihla/chat] empty model response — retrying once with nudge (locale=${localeKey})`);
+            await streamWithGemini(tap, encoder, systemPrompt + emptyNudge, body.messages);
+          } catch (retryErr) {
+            console.warn("[rihla/chat] empty-response retry failed:", (retryErr as Error).message?.slice(0, 120));
+          }
+          // The tap captured any new text/tools from the retry. If the model
+          // produced something this time, treat the stall as handled so the
+          // generic canned line below doesn't also fire.
+          if (collectedText.join("").trim() || collectedTools.some((t) => TOOLS_WITH_UI.has(t.name))) {
+            stallHandled = true;
+          }
+        }
+
         // Generic empty-response fallback — only when nothing else handled
-        // the stall AND the model produced no text + no useful tool. Avoids
-        // the chat going dead silent on unrelated edge cases.
+        // the stall AND the model produced no text + no useful tool (incl. the
+        // retry-on-empty above). Avoids the chat going dead silent on unrelated
+        // edge cases.
         if (!stallHandled && !emittedText && !emittedVisibleTool) {
           const fallback =
             localeKey === "ar"
