@@ -7,7 +7,9 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { unstable_cache } from "next/cache";
 import { adminClient } from "@/lib/supabase/admin";
+import { SHOWROOMS_DATA } from "@/lib/showrooms-data";
 import type { Brand, Locale, Model, PromptVersion } from "@/lib/supabase/database.types";
 import type { BrandContext } from "@citroen-store/rihla-agent";
 
@@ -38,13 +40,16 @@ function applyOverrides(ctx: FullBrandContext): FullBrandContext {
   return { ...ctx, brand: { ...ctx.brand, agent_name: override } };
 }
 
-/** Fetch the full brand bundle by slug. Falls back to cached data on Supabase failure. */
-export async function getBrandContext(slug: string): Promise<FullBrandContext | null> {
-  const cached = brandCache.get(slug);
-  const fresh = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS;
-  if (fresh) return cached.ctx;
-
-  try {
+// Raw Supabase fetch, wrapped in Next's DURABLE data cache. The in-process Map
+// above only lives for one serverless instance — under scale-to-zero / churn,
+// most requests start with an empty Map and pay the full ~7s Supabase round
+// trip (the "Waiting for server response: 7.24s" the widget showed). This
+// cache persists across requests AND instances, so a cache hit returns in ~0ms.
+// Brand data changes rarely; 5 min revalidate (stale-while-revalidate) means at
+// most one request per window ever waits on Supabase. Throws on DB error so a
+// transient failure is NOT cached and the outer fallback still runs.
+const fetchBrandCached = unstable_cache(
+  async (slug: string): Promise<FullBrandContext> => {
     const supa = adminClient();
 
     const { data: brandRow, error: bErr } = await supa
@@ -54,22 +59,7 @@ export async function getBrandContext(slug: string): Promise<FullBrandContext | 
       .eq("enabled", true)
       .single();
     if (bErr || !brandRow) {
-      // Query error or missing row (e.g. Supabase restricted/paused, or the
-      // brand was de-seeded). Degrade gracefully instead of 404-ing: stale
-      // cache first, then local JSON, then null. Mirrors the catch block so a
-      // restricted DB that *answers* with an error behaves like an unreachable one.
-      if (cached) {
-        console.warn(`[brand-context] db error, serving stale cache for ${slug}:`, bErr?.message?.slice(0, 80));
-        return cached.ctx;
-      }
-      const fallback = await loadFromJsonFallback(slug);
-      if (fallback) {
-        const overridden = applyOverrides(fallback);
-        console.warn(`[brand-context] db error, serving JSON fallback for ${slug}:`, bErr?.message?.slice(0, 80));
-        brandCache.set(slug, { ctx: overridden, cachedAt: Date.now() });
-        return overridden;
-      }
-      return null;
+      throw new Error(`brand fetch failed for ${slug}: ${bErr?.message ?? "no row"}`);
     }
     const brand = brandRow as unknown as Brand;
 
@@ -100,28 +90,68 @@ export async function getBrandContext(slug: string): Promise<FullBrandContext | 
       if (row.city) cities.add(row.city.trim());
     }
 
-    const ctx: FullBrandContext = applyOverrides({
+    return applyOverrides({
       brand,
       activePrompt: (prompt.data as unknown as PromptVersion | null) ?? null,
       models: (models.data as unknown as Model[]) ?? [],
       servedCities: [...cities].sort(),
     });
+  },
+  ["brand-context"],
+  { revalidate: 300, tags: ["brand-context"] }
+);
+
+/** Served cities for a brand, derived from the bundled static showroom list
+ *  (the same source `find_showrooms` uses). Replaces the Supabase showrooms
+ *  query so brand context needs zero DB access. */
+function servedCitiesFromStatic(slug: string): string[] {
+  const set = new Set<string>();
+  for (const r of SHOWROOMS_DATA[slug] ?? []) {
+    if (r.city) set.add(r.city.trim());
+  }
+  return [...set].sort();
+}
+
+/** Fetch the full brand bundle by slug.
+ *
+ *  LOCAL-FIRST: the Jeep chatbot (and any brand with a bundled JSON) runs
+ *  entirely on static data — scripts/brand-data/<slug>.json + SHOWROOMS_DATA —
+ *  with NO Supabase in the request path. That round trip was blocking the
+ *  widget ~7s on every load ("Waiting for server response: 7.24s"). Supabase is
+ *  only consulted for brands that have no local JSON. */
+export async function getBrandContext(slug: string): Promise<FullBrandContext | null> {
+  const cached = brandCache.get(slug);
+  const fresh = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS;
+  if (fresh) return cached.ctx;
+
+  // Local static data first — instant, no network.
+  const local = await loadFromJsonFallback(slug);
+  if (local) {
+    const ctx = applyOverrides({ ...local, servedCities: servedCitiesFromStatic(slug) });
+    brandCache.set(slug, { ctx, cachedAt: Date.now() });
+    return ctx;
+  }
+
+  // No bundled JSON for this brand — fall back to Supabase (other/legacy demos).
+  try {
+    const ctx = await fetchBrandCached(slug);
     brandCache.set(slug, { ctx, cachedAt: Date.now() });
     return ctx;
   } catch (err) {
-    // DNS / fetch failure. Serve stale cache, then JSON fallback, then null.
+    // DB error / missing row / unreachable (incl. Supabase paused or restricted).
+    // Degrade gracefully: stale in-process cache → local JSON → null.
     if (cached) {
-      console.warn(`[brand-context] supabase unreachable, serving stale cache for ${slug}:`, (err as Error).message?.slice(0, 80));
+      console.warn(`[brand-context] supabase fetch failed, serving stale cache for ${slug}:`, (err as Error).message?.slice(0, 80));
       return cached.ctx;
     }
     const fallback = await loadFromJsonFallback(slug);
     if (fallback) {
       const overridden = applyOverrides(fallback);
-      console.warn(`[brand-context] supabase unreachable, serving JSON fallback for ${slug}`);
+      console.warn(`[brand-context] supabase fetch failed, serving JSON fallback for ${slug}:`, (err as Error).message?.slice(0, 80));
       brandCache.set(slug, { ctx: overridden, cachedAt: Date.now() });
       return overridden;
     }
-    console.warn(`[brand-context] supabase unreachable + no fallback for ${slug}:`, (err as Error).message?.slice(0, 80));
+    console.warn(`[brand-context] supabase fetch failed + no fallback for ${slug}:`, (err as Error).message?.slice(0, 80));
     return null;
   }
 }

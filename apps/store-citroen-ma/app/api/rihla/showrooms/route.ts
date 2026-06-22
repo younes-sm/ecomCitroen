@@ -3,7 +3,6 @@
 // returns all showrooms for the brand sorted by primary_dealer first.
 
 import { NextRequest } from "next/server";
-import { adminClient } from "@/lib/supabase/admin";
 import { SHOWROOMS_DATA } from "@/lib/showrooms-data";
 
 export const runtime = "nodejs";
@@ -22,8 +21,8 @@ type ShowroomRow = {
   primary_dealer: boolean;
 };
 
-/** Local fallback for when Supabase is unreachable/restricted, so the showroom
- *  selector still renders. Mirrors the DB shape, filtered + sorted like the query. */
+/** Build showroom rows from the bundled static dataset, filtered + sorted.
+ *  This is now the sole source — the Jeep chatbot uses no Supabase at runtime. */
 function fallbackShowrooms(slug: string, city: string): ShowroomRow[] {
   const all = SHOWROOMS_DATA[slug] ?? [];
   const needle = city.toLowerCase();
@@ -50,32 +49,6 @@ export async function GET(req: NextRequest) {
   const city = (url.searchParams.get("city") ?? "").trim();
   if (!slug) return Response.json({ items: [] }, { status: 400 });
 
-  try {
-    const supa = adminClient();
-    const { data: brandRow } = await supa.from("brands").select("id").eq("slug", slug).single();
-    const brandId = (brandRow as { id?: string } | null)?.id;
-    if (!brandId) {
-      // DB restricted / brand not seeded — serve local data so the selector renders.
-      return Response.json({ items: fallbackShowrooms(slug, city), city: city || null });
-    }
-
-    let q = supa
-      .from("showrooms")
-      .select("id, name, city, address, phone, whatsapp, email, hours, service_centre, primary_dealer")
-      .eq("brand_id", brandId)
-      .eq("enabled", true);
-    if (city) {
-      // Case-insensitive city match — also fuzzy on prefix.
-      q = q.ilike("city", `%${city}%`);
-    }
-    q = q.order("primary_dealer", { ascending: false }).order("name");
-    const { data } = await q;
-    let items = (data as unknown as ShowroomRow[]) ?? [];
-    // DB reachable but returned nothing (e.g. showrooms not seeded) — fall back.
-    if (items.length === 0) items = fallbackShowrooms(slug, city);
-    return Response.json({ items, city: city || null });
-  } catch (err) {
-    console.warn("[showrooms] failed, serving local fallback:", (err as Error).message?.slice(0, 100));
-    return Response.json({ items: fallbackShowrooms(slug, city), city: city || null });
-  }
+  // Served entirely from bundled static data — no Supabase round trip.
+  return Response.json({ items: fallbackShowrooms(slug, city), city: city || null });
 }

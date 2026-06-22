@@ -88,19 +88,20 @@ export async function GET(req: NextRequest) {
   let customBody: string | undefined;
   let voiceName = "Zephyr";
 
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    try {
-      const ctx = await getBrandContext(brandSlug);
-      if (ctx) {
-        brand = toAgentContext(ctx);
-        // jeep-ma's prompt is the modular composition under `lib/jeep-prompt/`;
-        // ignore any stale Supabase customBody so there's a single source.
-        customBody = brandSlug === "jeep-ma" ? undefined : (ctx.activePrompt?.body ?? undefined);
-        voiceName = ctx.brand.voice_name;
-      }
-    } catch (err) {
-      console.warn("[system-prompt] brand load failed:", (err as Error).message.slice(0, 100));
+  // Brand context is local-first (bundled JSON + static showrooms), so this no
+  // longer depends on Supabase env being present — it works with Supabase fully
+  // removed.
+  try {
+    const ctx = await getBrandContext(brandSlug);
+    if (ctx) {
+      brand = toAgentContext(ctx);
+      // jeep-ma's prompt is the modular composition under `lib/jeep-prompt/`;
+      // ignore any stale customBody so there's a single source.
+      customBody = brandSlug === "jeep-ma" ? undefined : (ctx.activePrompt?.body ?? undefined);
+      voiceName = ctx.brand.voice_name;
     }
+  } catch (err) {
+    console.warn("[system-prompt] brand load failed:", (err as Error).message.slice(0, 100));
   }
 
   const locale = mapLocale(localeParam, brand.market);

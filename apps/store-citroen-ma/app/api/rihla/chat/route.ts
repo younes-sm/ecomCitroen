@@ -856,17 +856,19 @@ export async function POST(req: NextRequest) {
   const body = (await req.json()) as ChatRequest;
   const encoder = new TextEncoder();
 
-  // Load brand context if a brandSlug is provided AND Supabase is configured.
-  // Falls back to a minimal hard-coded Citroën catalog for legacy calls.
+  // Load brand context if a brandSlug is provided. Brand context is local-first
+  // (bundled JSON + static showrooms), so this no longer needs Supabase env and
+  // never blocks on a DB round trip. Falls back to a minimal hard-coded Citroën
+  // catalog for legacy calls.
   let brand: BrandContext = CITROEN_FALLBACK;
   let customBody: string | undefined;
-  if (body.brandSlug && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (body.brandSlug) {
     try {
       const ctx = await getBrandContext(body.brandSlug);
       if (ctx) {
         brand = toAgentContext(ctx);
         // jeep-ma's prompt is the modular composition under `lib/jeep-prompt/`;
-        // ignore any stale Supabase customBody so there's a single source.
+        // ignore any stale customBody so there's a single source.
         customBody = body.brandSlug === "jeep-ma" ? undefined : (ctx.activePrompt?.body ?? undefined);
       }
     } catch (err) {
@@ -956,18 +958,27 @@ export async function POST(req: NextRequest) {
 
   // Lazily create the conversation row on the first turn. We only persist when
   // we have a brandSlug (widget mode) — legacy storefront calls stay anonymous.
+  // Transcript persistence is BACKGROUND (fire-and-forget): the id is generated
+  // up front so we can stream the reply immediately and never block the response
+  // on a Supabase write. (Removing the awaited writes here is part of taking
+  // Supabase fully off the chat hot path.)
   let conversationId: string | null = body.conversationId ?? null;
   if (!conversationId && body.brandSlug) {
-    conversationId = await createConversation({
-      brandSlug: body.brandSlug,
-      locale: locale as Locale,
-      channel: body.voice ? "voice" : "chat",
-      userAgent: req.headers.get("user-agent"),
-    });
-  }
-  // Always persist the user's latest turn before streaming the assistant reply.
-  if (conversationId && lastUserMsg) {
-    await appendUserMessage(conversationId, lastUserMsg.content);
+    conversationId = globalThis.crypto.randomUUID();
+    const cid = conversationId;
+    const brandSlug = body.brandSlug;
+    const channel = body.voice ? "voice" : "chat";
+    const userAgent = req.headers.get("user-agent");
+    const userText = lastUserMsg?.content;
+    // Create the row, then append the first user turn (ordered so the message's
+    // FK to conversations is satisfied). Best-effort; errors are swallowed.
+    void (async () => {
+      await createConversation({ id: cid, brandSlug, locale: locale as Locale, channel, userAgent });
+      if (userText) await appendUserMessage(cid, userText);
+    })();
+  } else if (conversationId && lastUserMsg) {
+    // Existing conversation — log the new user turn in the background.
+    void appendUserMessage(conversationId, lastUserMsg.content);
   }
 
   const stream = new ReadableStream<Uint8Array>({

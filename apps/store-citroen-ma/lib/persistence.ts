@@ -22,6 +22,10 @@ function client() {
 
 /** Create a conversation row. Returns the new row id, or null on failure. */
 export async function createConversation(args: {
+  /** Optional caller-supplied id. Lets the chat route generate the id up front
+   *  and stream the reply immediately while this insert runs in the background,
+   *  so transcript logging never blocks the response. */
+  id?: string;
   brandSlug: string;
   promptId?: string | null;
   locale: Locale;
@@ -34,7 +38,7 @@ export async function createConversation(args: {
   // returning null here would silently kill the Salesforce push. A local id
   // keeps the flow alive; Supabase writes that reference it are best-effort
   // and no-op while the DB is down.
-  const localId = `local-${globalThis.crypto.randomUUID()}`;
+  const localId = args.id ?? `local-${globalThis.crypto.randomUUID()}`;
   const supa = client();
   if (!supa) return localId;
   try {
@@ -43,6 +47,7 @@ export async function createConversation(args: {
     if (!brandId) return localId;
     const { data, error } = await (supa.from("conversations") as any)
       .insert({
+        ...(args.id ? { id: args.id } : {}),
         brand_id: brandId,
         prompt_id: args.promptId ?? null,
         locale: args.locale,
