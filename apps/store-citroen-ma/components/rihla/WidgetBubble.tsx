@@ -682,10 +682,13 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
     // invalid one client-side so a bad value (e.g. "08100299" — wrong prefix,
     // 8 digits) never enters the lead. Echo what they typed + a localized
     // correction, and KEEP the phone request so the next input is re-validated.
-    // Only validate when the reply actually looks like a number attempt (≥5
-    // digits) — a conversational reply like "tu l'as déjà" passes through to
-    // the agent instead of triggering a format error.
-    if (typeRequest?.kind === "phone" && (text.match(/\d/g) ?? []).length >= 5) {
+    // Validate when the reply looks like a number attempt — digits with only
+    // phone punctuation (+, spaces, dashes, parens) — even a short one like
+    // "0654", so a wrong format is always caught. A conversational reply that
+    // contains letters (e.g. "tu l'as déjà") passes through to the agent.
+    const looksLikePhoneAttempt =
+      /^[+\d][\d\s().-]*$/.test(text) && (text.match(/\d/g) ?? []).length >= 2;
+    if (typeRequest?.kind === "phone" && looksLikePhoneAttempt) {
       const market: "MA" | "SA" = brand.slug.includes("ksa") ? "SA" : "MA";
       if (!validatePhone(text, market).ok) {
         setInput("");
