@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { GoogleGenAI, Type, type Tool, type Content } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { RIHLA_MODELS, buildSystemPrompt, type BrandContext } from "@citroen-store/rihla-agent";
@@ -1838,14 +1838,17 @@ export async function POST(req: NextRequest) {
         controller.close();
       }
 
-      // Persist the assistant turn after the stream closes — fire-and-forget.
-      // Skip tools that were already persisted INLINE (book_test_drive /
-      // book_showroom_visit / book_service_appointment / submit_complaint
-      // are awaited inside the stream so we can surface duplicates and
-      // ref numbers to the customer in real time).
+      // Persist the assistant turn after the stream closes. Uses Next's after()
+      // so the serverless runtime keeps the function ALIVE until these writes
+      // finish — a plain fire-and-forget after close() gets frozen on serverless,
+      // which is why assistant turns were missing from transcripts while user
+      // turns (written before the stream) survived.
+      // Skip tools already persisted INLINE (book_test_drive / book_showroom_visit
+      // / book_service_appointment / submit_complaint are awaited inside the
+      // stream so we can surface duplicates + ref numbers in real time).
       if (conversationId) {
         const finalText = collectedText.join("");
-        void (async () => {
+        after(async () => {
           try {
             if (finalText) await appendAssistantMessage(conversationId!, finalText);
             for (let idx = 0; idx < collectedTools.length; idx += 1) {
@@ -1875,7 +1878,7 @@ export async function POST(req: NextRequest) {
           } catch (err) {
             console.warn("[chat] post-stream persistence failed:", (err as Error).message.slice(0, 100));
           }
-        })();
+        });
       }
     },
   });
