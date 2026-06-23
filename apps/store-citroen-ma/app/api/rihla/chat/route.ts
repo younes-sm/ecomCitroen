@@ -129,13 +129,38 @@ function extractFlowState(messages: ChatMessage[]): FlowState {
             break;
           }
         }
-        const askedName = /(votre\s+pr[ée]nom|tapez\s+votre\s+pr[ée]nom|[ée]crivez\s+votre\s+pr[ée]nom|your\s+first\s+name|type\s+your\s+(first\s+)?name|اسمكم(\s+الأول)?|اكتبوا\s+اسمكم|كتب\s+السمية|سميتك)/i.test(prevAssistant);
+        // Match every shape the agent uses to ask for the name — "votre
+        // prénom", "votre nom et prénom", "votre nom de famille", "votre nom
+        // complet", "votre nom", plus EN/AR variants. The narrow "prénom"-only
+        // pattern missed "Tapez votre nom et prénom", so the name was never
+        // captured and the model kept re-asking it.
+        const askedName = /(votre\s+(pr[ée]nom|nom(\s+(et\s+pr[ée]nom|de\s+famille|complet))?)|tapez\s+votre\s+(pr[ée]nom|nom)|[ée]crivez\s+votre\s+(pr[ée]nom|nom)|your\s+(first\s+|full\s+)?name|type\s+your\s+(first\s+|full\s+)?name|اسمكم(\s+الأول)?|اكتبوا\s+اسمكم|كتب\s+السمية|سميتك|اللقب|الاسم\s+الكامل)/i.test(prevAssistant);
         const looksLikeName = /^[\p{L}\s'-]{2,40}$/u.test(text) && !/@/.test(text);
         if (askedName && looksLikeName) state.firstName = text.split(/\s+/)[0]!;
       }
     }
   }
   return state;
+}
+
+/** A hard, per-turn reminder of what's already captured, appended to the system
+ *  prompt so the model stops re-asking fields it already has (the "keeps asking
+ *  for my name / phone again" bug). Empty when nothing's collected yet. */
+function buildCollectedFieldsBlock(state: FlowState): string {
+  const have: string[] = [];
+  if (state.firstName) have.push(`first name = "${state.firstName}"`);
+  if (state.phone) have.push(`mobile = "${state.phone}"`);
+  if (state.email) have.push(`email = "${state.email}"`);
+  if (state.vin) have.push(`VIN = "${state.vin}"`);
+  if (state.model) have.push(`model = "${state.model}"`);
+  if (state.city) have.push(`city = "${state.city}"`);
+  if (state.maison) have.push(`showroom = "${state.maison}"`);
+  if (state.intervention) have.push(`intervention = "${state.intervention}"`);
+  if (have.length === 0) return "";
+  const nameLine = state.firstName
+    ? ` The customer's name is "${state.firstName}" — address them by it; NEVER ask for "prénom", "nom", "nom de famille" or "nom complet" again.`
+    : "";
+  return `\n\n═══ ALREADY COLLECTED — DO NOT ASK AGAIN ═══\nThese fields are ALREADY captured from this conversation. Do NOT re-request any of them (no request_input, no "tapez votre…"). Use them as-is and advance to the NEXT missing field, then the CNDP recap:\n${have.map((h) => `  • ${h}`).join("\n")}.${nameLine}`;
 }
 
 type RecoveryStep =
@@ -906,7 +931,18 @@ export async function POST(req: NextRequest) {
         mode: body.voice ? "voice" : "chat",
       }).prompt
     : "";
-  const systemPrompt = baseSystem + buildPromptSuffix(body.pageContext, !!body.voice) + buildSessionMemoryBlock(body.sessionContext) + jeepOverride;
+  // Explicit per-turn "already collected" state. The model frequently re-asks
+  // fields it already has (name asked 2-3×, phone twice, …) because it doesn't
+  // reliably track collection across turns. We extract what's captured from the
+  // history and hard-tell the model not to ask for it again. This is the
+  // reliable fix for the "keeps asking for my name" bug.
+  const collectedState = extractFlowState(body.messages);
+  const systemPrompt =
+    baseSystem +
+    buildPromptSuffix(body.pageContext, !!body.voice) +
+    buildSessionMemoryBlock(body.sessionContext) +
+    jeepOverride +
+    buildCollectedFieldsBlock(collectedState);
 
   const geminiKey = process.env.GOOGLE_API_KEY;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
