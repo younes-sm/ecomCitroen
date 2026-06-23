@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata = {
-  title: "Rihla — Citroën / Jeep / Peugeot",
-  description: "AI concierge for automotive e-commerce.",
+  title: "NARA — Jeep Maroc",
+  description: "Assistante virtuelle pour le e-commerce de Jeep Maroc.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

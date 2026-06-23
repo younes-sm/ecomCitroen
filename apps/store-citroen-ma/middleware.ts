@@ -1,66 +1,44 @@
-import createMiddleware from "next-intl/middleware";
 import { NextRequest, NextResponse } from "next/server";
-import { routing } from "./i18n/routing";
 
-const intlMiddleware = createMiddleware(routing);
+// ── Jeep-only production lockdown ────────────────────────────────────────────
+// This deployment (chatbot.jeep.ma) serves ONLY the Jeep widget. Its base URL
+// must not expose the multi-brand demo selector, the Citroën storefront under
+// /[locale], other brands' /demo & /embed, or the admin dashboard. So:
+//   • /w/jeep-ma            → served (the widget)
+//   • /api/* (non-admin)    → served (the widget's chat / voice / showrooms …)
+//   • /api/admin/*          → 404 (admin locked)
+//   • everything else       → redirected to /w/jeep-ma
+//
+// Reversible: restore the previous next-intl + admin-gate middleware from git
+// history to bring back the full multi-brand app.
+const JEEP_WIDGET = "/w/jeep-ma";
 
-const ADMIN_COOKIE = "admin_session";
-
-async function sha256Hex(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
-}
-
-export default async function middleware(req: NextRequest) {
+export default function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Admin gate.
-  if (pathname.startsWith("/admin")) {
-    if (pathname === "/admin/login" || pathname.startsWith("/admin/login/")) {
-      return NextResponse.next();
-    }
-    const pwd = process.env.ADMIN_PASSWORD;
-    if (!pwd) {
-      // Misconfigured — fall through to login page.
-      const url = req.nextUrl.clone();
-      url.pathname = "/admin/login";
-      return NextResponse.redirect(url);
-    }
-    const expected = await sha256Hex(pwd);
-    const got = req.cookies.get(ADMIN_COOKIE)?.value ?? "";
-    if (!constantTimeEqual(got, expected)) {
-      const url = req.nextUrl.clone();
-      url.pathname = "/admin/login";
-      url.searchParams.set("next", pathname);
-      return NextResponse.redirect(url);
-    }
+  // Admin APIs are part of the locked-down admin section.
+  if (pathname.startsWith("/api/admin")) {
+    return new NextResponse("Not found", { status: 404 });
+  }
+  // Widget APIs (chat, voice, system-prompt, showrooms, tts, ocr, …) stay open.
+  if (pathname.startsWith("/api/")) {
     return NextResponse.next();
   }
-
-  // Root selector + widget + demo + iframe-embed routes don't need next-intl.
-  if (
-    pathname === "/" ||
-    pathname.startsWith("/w/") ||
-    pathname.startsWith("/demo/") ||
-    pathname.startsWith("/embed/")
-  ) {
+  // The Jeep widget itself.
+  if (pathname === JEEP_WIDGET || pathname === `${JEEP_WIDGET}/`) {
     return NextResponse.next();
   }
-
-  return intlMiddleware(req);
+  // Anything else → the Jeep widget.
+  const url = req.nextUrl.clone();
+  url.pathname = JEEP_WIDGET;
+  url.search = "";
+  return NextResponse.redirect(url);
 }
 
 export const config = {
-  matcher: ["/((?!api|_next|_vercel|.*\\..*).*)"],
+  // Run on every route EXCEPT Next internals and static files, so the widget's
+  // JS chunks (/_next/*), fonts, and images (/brand*, /brands* — they have file
+  // extensions) load normally. API routes ARE matched so the admin-API 404 +
+  // widget-API allow rules above apply.
+  matcher: ["/((?!_next|_vercel|.*\\..*).*)"],
 };
