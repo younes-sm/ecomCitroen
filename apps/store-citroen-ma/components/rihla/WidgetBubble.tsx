@@ -76,13 +76,22 @@ const STORAGE_KEY = (slug: string) => `widget-state-${slug}`;
 // `{"field":"phone"}` / dangling `"phone"}` as text instead of a structured
 // function call) never renders as a chat bubble. Conservative — requires the
 // parens/braces that normal prose never has, so real replies pass untouched.
-const TOOL_LEAK_CALL_RE = /\b(?:request_input|find_showrooms|show_model_image|show_model_video|configure_car|open_model|book_test_drive|book_showroom_visit|book_service_appointment|submit_complaint|calculate_financing|open_brand_page|open_financing|open_dealers|start_reservation|lookup_vin|end_call)\s*\([^)]*\)/gi;
+const TOOL_NAMES_RE = "request_input|find_showrooms|show_model_image|show_model_video|configure_car|open_model|book_test_drive|book_showroom_visit|book_service_appointment|submit_complaint|calculate_financing|open_brand_page|open_financing|open_dealers|start_reservation|lookup_vin|end_call";
+const TOOL_LEAK_CALL_RE = new RegExp(`\\b(?:${TOOL_NAMES_RE})\\s*\\([^)]*\\)`, "gi");
 function stripToolLeak(s: string): string {
-  let out = s.replace(TOOL_LEAK_CALL_RE, "");
-  // Bare argument JSON objects: {"field":"phone"} / {"slug":"compass", ...}
-  out = out.replace(/\{\s*"[a-zA-Z_]+"\s*:\s*"[^"{}]*"(?:\s*,\s*"[a-zA-Z_]+"\s*:\s*"[^"{}]*")*\s*\}/g, "");
-  // A bubble that is ONLY a dangling fragment such as `"phone"}` or `field":"phone"}`.
-  if (/^\s*"?[a-zA-Z_]+"?\s*:?\s*"?[a-zA-Z_]*"?\s*[}\])]+\s*$/.test(out)) out = "";
+  let out = s;
+  // Gemini "tool-code" pseudo-syntax: `<call:default_api:request_input{field:email}?>`
+  // and any angle-bracketed form, with or without the closing `?>`.
+  out = out.replace(/<\s*\/?\s*call[:_][^>]*>?/gi, "");
+  out = out.replace(new RegExp(`<[^>]*\\b(?:default_api|${TOOL_NAMES_RE})\\b[^>]*>?`, "gi"), "");
+  // default_api.tool(...) / default_api:tool{...}
+  out = out.replace(/\bdefault_api\s*[:.]\s*\w+\s*[({][^)}]*[)}]/gi, "");
+  // tool_name({...}) or tool_name(...) emitted as text.
+  out = out.replace(TOOL_LEAK_CALL_RE, "");
+  // Bare argument objects, quoted or not: {"field":"phone"} / {field:email}
+  out = out.replace(/\{\s*"?[a-zA-Z_]+"?\s*:\s*"?[^"{}]*"?(?:\s*,\s*"?[a-zA-Z_]+"?\s*:\s*"?[^"{}]*"?)*\s*\}/g, "");
+  // A bubble that is ONLY a dangling fragment such as `"phone"}` or `field:email}`.
+  if (/^\s*"?[a-zA-Z_]+"?\s*:?\s*"?[a-zA-Z_]*"?\s*[}\])>]+\s*$/.test(out)) out = "";
   return out.trim();
 }
 
