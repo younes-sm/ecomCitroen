@@ -179,20 +179,7 @@ function writeStoredConv(
 }
 
 export function WidgetBubble({ brand, availableLangs, embedded = false, postSizeToParent = false }: Props) {
-  // Restore a prior CHAT conversation once on mount (survives full-page
-  // navigation when the widget iframe lives in a multi-page footer). Voice
-  // sessions are intentionally NOT restored — a live WebSocket call can't
-  // resume across a page load — so a restored session always reopens as chat.
-  const initialConvRef = useRef<StoredConv | null>(null);
-  const initRanRef = useRef(false);
-  if (!initRanRef.current) {
-    initRanRef.current = true;
-    initialConvRef.current = readStoredConv(brand.slug);
-  }
-  const restoredConv = initialConvRef.current;
-  const hasRestoredConv = !!restoredConv && restoredConv.messages.length > 0;
-
-  const [open, setOpen] = useState(embedded || (hasRestoredConv && !!restoredConv?.open));
+  const [open, setOpen] = useState(embedded);
 
   // Iframe-embed handshake: tell the parent window whether the panel is open
   // (full size, ~380×620) or collapsed to a FAB (~96×96). The embed.js snippet
@@ -214,11 +201,8 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const initial = readStored(brand.slug);
-  const [voiceLang, setVoiceLang] = useState<VoiceLang | null>(
-    hasRestoredConv ? (restoredConv!.lang ?? initial.lang) : initial.lang
-  );
-  // A restored conversation always reopens in CHAT view (voice can't resume).
-  const [mode, setMode] = useState<Mode | null>(hasRestoredConv ? "chat" : initial.mode);
+  const [voiceLang, setVoiceLang] = useState<VoiceLang | null>(initial.lang);
+  const [mode, setMode] = useState<Mode | null>(initial.mode);
 
   // True from the moment the user ends the call (red button / back) until
   // they explicitly pick a mode again. Blocks the voice auto-start effect
@@ -229,26 +213,46 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
   const langConfig = voiceLang ? getLangConfig(voiceLang) : null;
   const apiLocale = voiceLang === "darija" ? "ar" : voiceLang ?? "fr";
 
-  const [messages, setMessages] = useState<Msg[]>(hasRestoredConv ? restoredConv!.messages : []);
+  const [messages, setMessages] = useState<Msg[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef(messages);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
-  const conversationIdRef = useRef<string | null>(hasRestoredConv ? (restoredConv!.conversationId ?? null) : null);
+  const conversationIdRef = useRef<string | null>(null);
 
-  // Snapshot the CHAT conversation so it survives a footer-iframe page reload.
-  // Chat mode only — voice transcripts are not persisted. Keyed on messages +
-  // open; reads the latest conversationId at save time. writeStoredConv no-ops
-  // (and clears) for greeting-only transcripts.
+  // Restore a prior CHAT conversation AFTER mount (client-only). Reading
+  // localStorage during render caused a hydration mismatch (server rendered the
+  // closed FAB, client the restored open panel). Initializing to SSR-safe
+  // defaults and restoring here keeps the first client render identical to the
+  // server, then updates post-hydration. Voice sessions are NOT restored — a
+  // live call can't resume across a page load — so a restore always reopens as
+  // chat.
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
-    if (mode !== "chat") return;
+    const r = readStoredConv(brand.slug);
+    if (r && r.messages.length > 0) {
+      setMessages(r.messages);
+      conversationIdRef.current = r.conversationId ?? null;
+      if (r.lang) setVoiceLang(r.lang);
+      setMode("chat");
+      if (r.open) setOpen(true);
+    }
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Snapshot the CHAT conversation so it survives a footer-iframe reload. Gated
+  // on `hydrated` so the initial empty state doesn't wipe the stored snapshot
+  // before the restore effect above has read it. Chat mode only.
+  useEffect(() => {
+    if (!hydrated || mode !== "chat") return;
     writeStoredConv(brand.slug, {
       lang: voiceLang,
       messages,
       conversationId: conversationIdRef.current,
       open,
     });
-  }, [messages, open, mode, voiceLang, brand.slug]);
+  }, [hydrated, messages, open, mode, voiceLang, brand.slug]);
 
   // Inject the assistant greeting on chat stage entry (or after mode pick).
   // For brands that have APV enabled (jeep-ma) the greeting lists all four

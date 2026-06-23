@@ -128,11 +128,20 @@ async function main() {
   }
   const supa = createClient(url, serviceKey, { auth: { persistSession: false } });
 
+  // This deployment is Jeep-only. Seed just jeep-ma so the admin dashboard and
+  // brand list don't show Citroën / Peugeot. Override with SEED_BRANDS (comma-
+  // separated slugs) if you ever need to seed more.
+  const SEED_BRANDS = (process.env.SEED_BRANDS ?? "jeep-ma").split(",").map((s) => s.trim()).filter(Boolean);
+
   const dataDir = path.resolve(__dirname, "brand-data");
   const files = (await fs.readdir(dataDir)).filter((f) => f.endsWith(".json"));
 
   for (const file of files) {
     const slug = file.replace(/\.json$/, "");
+    if (!SEED_BRANDS.includes(slug)) {
+      console.log(`skip ${slug} — not in SEED_BRANDS (${SEED_BRANDS.join(", ")})`);
+      continue;
+    }
     const meta = BRAND_META[slug];
     if (!meta) {
       console.log(`skip ${slug} — no metadata mapping`);

@@ -8,7 +8,10 @@
     "start": "next start --port 3100",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf .turbo .next"
+    "clean": "rm -rf .turbo .next",
+    "db:seed": "tsx scripts/seed-supabase.ts",
+    "db:seed-showrooms": "tsx scripts/seed-showrooms.ts",
+    "db:check": "tsx scripts/check-supabase.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",

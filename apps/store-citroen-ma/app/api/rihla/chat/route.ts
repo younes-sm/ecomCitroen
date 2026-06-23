@@ -335,17 +335,24 @@ function mapLocaleToRihla(l?: string, market?: string): "fr-MA" | "ar-MA" | "dar
 }
 
 /** Minimal brand fallback for legacy citroen-ma calls without brandSlug. */
-const CITROEN_FALLBACK: BrandContext = {
-  brandSlug: "citroen-ma",
-  brandName: "Citroën Maroc",
-  agentName: "Rihla",
+// Jeep-only deployment: the fallback is Jeep (NARA + Jeep models), NEVER
+// Citroën. A wrong fallback was why a Jeep conversation once recommended
+// "c3-aircross" with the "Rihla" agent — the brand hadn't resolved and it fell
+// back to Citroën. In practice getBrandContext("jeep-ma") (local-first, reads
+// jeep-ma.json) supplies the real catalog; this constant is the last resort.
+const JEEP_FALLBACK: BrandContext = {
+  brandSlug: "jeep-ma",
+  brandName: "Jeep Maroc",
+  agentName: "NARA",
   market: "MA",
   defaultCurrency: "MAD",
-  servedCities: ["Casablanca", "Rabat", "Marrakech", "Tanger", "Fès", "Agadir", "Oujda", "Tétouan"],
+  servedCities: ["Casablanca", "Rabat", "Marrakech", "Tanger", "Fès", "Agadir", "Oujda", "Kénitra"],
   models: [
-    { slug: "c3-aircross", name: "C3 Aircross", priceFrom: 234900, currency: "MAD", fuel: "Hybrid", seats: 5 },
-    { slug: "c5-aircross", name: "C5 Aircross", priceFrom: 295900, currency: "MAD", fuel: "PHEV", seats: 5 },
-    { slug: "berlingo", name: "Berlingo", priceFrom: 195900, currency: "MAD", fuel: "Diesel", seats: 7 },
+    { slug: "avenger", name: "Avenger", priceFrom: 271055, currency: "MAD", fuel: "MHEV", seats: 5 },
+    { slug: "compass", name: "Compass", priceFrom: 344000, currency: "MAD", fuel: "MHEV", seats: 5 },
+    { slug: "wrangler", name: "Wrangler", priceFrom: 870000, currency: "MAD", fuel: "4xe", seats: 5 },
+    { slug: "grand-cherokee", name: "Grand Cherokee", priceFrom: 950000, currency: "MAD", fuel: "4xe", seats: 5 },
+    { slug: "renegade", name: "Renegade", priceFrom: 280000, currency: "MAD", fuel: "MHEV", seats: 5 },
   ],
 };
 
@@ -882,16 +889,19 @@ export async function POST(req: NextRequest) {
   // (bundled JSON + static showrooms), so this no longer needs Supabase env and
   // never blocks on a DB round trip. Falls back to a minimal hard-coded Citroën
   // catalog for legacy calls.
-  let brand: BrandContext = CITROEN_FALLBACK;
+  let brand: BrandContext = JEEP_FALLBACK;
   let customBody: string | undefined;
-  if (body.brandSlug) {
+  // Jeep-only deployment — default the brand to jeep-ma when the client omits
+  // it, so the catalog/agent is ALWAYS Jeep (never the Citroën fallback).
+  const resolvedSlug = body.brandSlug || "jeep-ma";
+  {
     try {
-      const ctx = await getBrandContext(body.brandSlug);
+      const ctx = await getBrandContext(resolvedSlug);
       if (ctx) {
         brand = toAgentContext(ctx);
         // jeep-ma's prompt is the modular composition under `lib/jeep-prompt/`;
         // ignore any stale customBody so there's a single source.
-        customBody = body.brandSlug === "jeep-ma" ? undefined : (ctx.activePrompt?.body ?? undefined);
+        customBody = resolvedSlug === "jeep-ma" ? undefined : (ctx.activePrompt?.body ?? undefined);
       }
     } catch (err) {
       console.warn("[chat] failed to load brand context, using fallback:", (err as Error).message);

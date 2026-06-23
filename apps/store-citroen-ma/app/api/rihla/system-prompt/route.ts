@@ -9,16 +9,19 @@ import { composeJeepPrompt } from "@/lib/jeep-prompt";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const CITROEN_FALLBACK: BrandContext = {
-  brandSlug: "citroen-ma",
-  brandName: "Citroën Maroc",
-  agentName: "Rihla",
+// Jeep-only deployment: fallback is Jeep (NARA + Jeep models), never Citroën.
+const JEEP_FALLBACK: BrandContext = {
+  brandSlug: "jeep-ma",
+  brandName: "Jeep Maroc",
+  agentName: "NARA",
   market: "MA",
   defaultCurrency: "MAD",
   models: [
-    { slug: "c3-aircross", name: "C3 Aircross", priceFrom: 234900, currency: "MAD", fuel: "Hybrid", seats: 5 },
-    { slug: "c5-aircross", name: "C5 Aircross", priceFrom: 295900, currency: "MAD", fuel: "PHEV", seats: 5 },
-    { slug: "berlingo", name: "Berlingo", priceFrom: 195900, currency: "MAD", fuel: "Diesel", seats: 7 },
+    { slug: "avenger", name: "Avenger", priceFrom: 271055, currency: "MAD", fuel: "MHEV", seats: 5 },
+    { slug: "compass", name: "Compass", priceFrom: 344000, currency: "MAD", fuel: "MHEV", seats: 5 },
+    { slug: "wrangler", name: "Wrangler", priceFrom: 870000, currency: "MAD", fuel: "4xe", seats: 5 },
+    { slug: "grand-cherokee", name: "Grand Cherokee", priceFrom: 950000, currency: "MAD", fuel: "4xe", seats: 5 },
+    { slug: "renegade", name: "Renegade", priceFrom: 280000, currency: "MAD", fuel: "MHEV", seats: 5 },
   ],
 };
 
@@ -80,11 +83,11 @@ const LANG_REMINDER: Record<Locale, string> = {
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const brandSlug = url.searchParams.get("brand") ?? "citroen-ma";
+  const brandSlug = url.searchParams.get("brand") ?? "jeep-ma";
   const localeParam = url.searchParams.get("locale");
   const voice = url.searchParams.get("voice") === "1";
 
-  let brand: BrandContext = CITROEN_FALLBACK;
+  let brand: BrandContext = JEEP_FALLBACK;
   let customBody: string | undefined;
   let voiceName = "Zephyr";
 

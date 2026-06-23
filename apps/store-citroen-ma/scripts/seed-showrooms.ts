@@ -30,7 +30,15 @@ async function main() {
     process.exit(1);
   }
 
+  // Jeep-only deployment — seed showrooms for jeep-ma only (override with
+  // SEED_BRANDS, comma-separated slugs).
+  const SEED_BRANDS = (process.env.SEED_BRANDS ?? "jeep-ma").split(",").map((s) => s.trim()).filter(Boolean);
+
   for (const [slug, rooms] of Object.entries(DATA)) {
+    if (!SEED_BRANDS.includes(slug)) {
+      console.log(`skip ${slug} — not in SEED_BRANDS (${SEED_BRANDS.join(", ")})`);
+      continue;
+    }
     const { data: brand } = await supa.from("brands").select("id").eq("slug", slug).single();
     const brandId = (brand as { id?: string } | null)?.id;
     if (!brandId) {
