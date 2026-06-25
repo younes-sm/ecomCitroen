@@ -494,6 +494,21 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
     writeStored(brand.slug, voiceLang, null);
   }, [brand.slug, voiceLang, live, clearCallArtifacts]);
 
+  // Leave the call view when the voice session ends on its OWN (idle timeout,
+  // Gemini drop, network) — not just on the red button. Without this, the call
+  // screen stayed frozen ("EN APPEL 1:08") after the hook had already closed
+  // the session. We track whether the call ever connected; when it drops back
+  // to disconnected while still in voice mode, reset to the picker.
+  const callWasConnectedRef = useRef(false);
+  useEffect(() => {
+    if (live.isConnected) {
+      callWasConnectedRef.current = true;
+    } else if (callWasConnectedRef.current && mode === "voice") {
+      callWasConnectedRef.current = false;
+      resetToMode();
+    }
+  }, [live.isConnected, mode, resetToMode]);
+
   const sendTextMessage = useCallback(async (text: string, options?: { marker?: string }) => {
     const current = messagesRef.current;
     const userMsg: Msg = { kind: "text", role: "user", text };

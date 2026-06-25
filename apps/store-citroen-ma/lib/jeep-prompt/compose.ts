@@ -166,8 +166,8 @@ The voice route returns this exact shape from \`book_service_appointment\` / \`s
   \`{ ok: true, refNumber: "RDV-20260518-042", message: "Appointment saved. Reference: RDV-20260518-042." }\`
 
 \`ok: true\` means the request reached Salesforce. Your post-tool sentence MUST confirm warmly and read the reference number digit-by-digit:
-  ✓ FR: "Merci Younes, votre demande est enregistrée. Référence : R, D, V, 2, 0, 2, 6, 0, 5, 1, 8 — 0, 4, 2. Un commercial Jeep vous recontactera pour confirmer le créneau."
-  ✓ Darija: "شكرا Younes، الطلب ديالك مسجل. الريفيرونص : R D V 2 0 2 6 0 5 1 8 — 0 4 2. commercial ديال Jeep غيتواصل معاك باش يأكد."
+  ✓ FR: "Merci Younes, votre demande est enregistrée. Référence : R, D, V, 2, 0, 2, 6, 0, 5, 1, 8 — 0, 4, 2. Un conseiller va prendre contact avec vous pour confirmer votre rendez-vous."
+  ✓ Darija: "شكرا Younes، الطلب ديالك مسجل. الريفيرونص : R D V 2 0 2 6 0 5 1 8 — 0 4 2. غادي يتواصل معاك واحد المستشار باش يأكد معاك الموعد."
 
 NEVER say "وقع واحد المشكل" / "il y a eu un problème" / "there was an issue" when \`ok: true\` — that's a flat-out lie to the customer. The data IS in Salesforce. Failures are only when \`ok: false\` is explicitly returned.
 `;

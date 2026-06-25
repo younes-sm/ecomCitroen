@@ -295,6 +295,22 @@ export async function captureLeadFromBooking(args: {
   // failure path here just leaves supabaseOk=false and falls through.
   const supa = client();
   if (supa) {
+    // Idempotency — ONE test-drive lead per conversation. The model often
+    // re-fires book_test_drive across several turns; without this guard each
+    // call inserted a fresh leads row (the duplicate-lead bug — 8× the same
+    // customer) and re-pushed Salesforce. If a lead already exists for this
+    // conversation, treat it as already captured and stop here.
+    try {
+      const { data: existing } = await (supa.from("leads") as any)
+        .select("id")
+        .eq("conversation_id", args.conversationId)
+        .limit(1)
+        .maybeSingle();
+      if (existing) {
+        console.log(`[lead] dedup — already captured for conv=${args.conversationId}; skipping insert + Salesforce`);
+        return { supabaseOk: true, salesforce: "skipped" };
+      }
+    } catch { /* best-effort dedup — fall through to insert */ }
     try {
       const { data: brandRow } = await supa.from("brands").select("id").eq("slug", args.brandSlug).single();
       const brandId = (brandRow as unknown as { id?: string } | null)?.id;

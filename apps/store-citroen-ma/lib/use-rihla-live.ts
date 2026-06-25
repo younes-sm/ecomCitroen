@@ -281,6 +281,14 @@ export function useRihlaLive(
   // connect() starts, cleared only when the session fully ends.
   const connectInFlightRef = useRef(false);
   const disconnectRef = useRef<(() => void) | null>(null);
+  // Idle auto-end. A voice call that connects but sees NO interaction (no user
+  // speech, no agent turn) leaves the conversation stuck "open" in the DB —
+  // the dashboard was full of abandoned voice rows. We stamp lastActivityRef on
+  // every user/agent transcript + tool call, and a watchdog ends the call after
+  // IDLE_TIMEOUT_MS of silence (disconnect() persists "end" → closes the row).
+  const IDLE_TIMEOUT_MS = 60_000;
+  const lastActivityRef = useRef<number>(0);
+  const idleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callbacksRef = useRef(callbacks);
   callbacksRef.current = callbacks;
   // Voice persistence — server-issued conversation id, plus rolling buffers
@@ -447,6 +455,8 @@ export function useRihlaLive(
         // enabled in the setup payload). Buffer until turnComplete.
         if (sc.inputTranscription?.text) {
           const t = sc.inputTranscription.text;
+          // Real user speech = activity → reset the idle clock.
+          lastActivityRef.current = Date.now();
           userBufferRef.current += t;
           callbacksRef.current.onTranscript?.(t, true);
         }
@@ -468,6 +478,9 @@ export function useRihlaLive(
           }
         }
         if (sc?.turnComplete) {
+          // A completed turn restarts the idle clock — the user gets a full
+          // IDLE_TIMEOUT_MS to respond after the agent finishes speaking.
+          lastActivityRef.current = Date.now();
           // Flush BOTH buffers once per completed model turn. Persisting user
           // text first preserves chronological order in the transcript view.
           if (userBufferRef.current.trim()) {
@@ -750,6 +763,18 @@ export function useRihlaLive(
           `%c[voice] ✅ SESSION READY — conv=${conversationIdRef.current ?? "n/a"} voice=${resolvedVoice}`,
           "color:#22c55e;font-weight:bold"
         );
+        // Start the idle watchdog. Stamp activity now (session just opened), then
+        // poll every 10s — if there's been no user/agent activity for
+        // IDLE_TIMEOUT_MS, end the call so the conversation doesn't sit "open"
+        // forever (abandoned voice calls were the #1 stuck-open cause).
+        lastActivityRef.current = Date.now();
+        if (idleTimerRef.current) clearInterval(idleTimerRef.current);
+        idleTimerRef.current = setInterval(() => {
+          if (Date.now() - lastActivityRef.current >= IDLE_TIMEOUT_MS) {
+            console.warn(`%c[voice] ⏱️ idle ${IDLE_TIMEOUT_MS / 1000}s — auto-ending call`, "color:#f59e0b");
+            disconnectRef.current?.();
+          }
+        }, 10_000);
       } catch (err) {
         console.error("%c[voice] ✗ setup send failed", "color:#ef4444;font-weight:bold", err);
       }
@@ -842,6 +867,7 @@ export function useRihlaLive(
       `%c[voice] ⏹️ SESSION CLOSING — disconnect() called (conv=${conversationIdRef.current ?? "n/a"}, wsOpen=${!!wsRef.current})`,
       "color:#ef4444;font-weight:bold"
     );
+    if (idleTimerRef.current) { clearInterval(idleTimerRef.current); idleTimerRef.current = null; }
     // Mark the voice conversation closed (best effort).
     if (conversationIdRef.current) {
       // Include brandSlug so the server's stalled-booking recovery (in
@@ -870,6 +896,7 @@ export function useRihlaLive(
   // it appears in the conversation transcript even though Gemini's input
   // transcription only covers audio.
   const sendText = useCallback((text: string) => {
+    lastActivityRef.current = Date.now();
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ realtimeInput: { text } }));
     }
@@ -880,6 +907,7 @@ export function useRihlaLive(
   const notifyUserText = useCallback((text: string) => {
     const t = text.trim();
     if (!t) return;
+    lastActivityRef.current = Date.now();
     callbacksRef.current.onTranscript?.(t, true);
     if (conversationIdRef.current) {
       void persistEvent({ kind: "user_text", text: t });
