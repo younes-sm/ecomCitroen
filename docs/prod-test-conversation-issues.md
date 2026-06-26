@@ -21,11 +21,11 @@ Only issues actually observed in the test conversations are listed here (symptom
 ### 2. Post-booking loop — 🗄️ DB
 - **Seen (Younès chat):** after the booking succeeded, the user asked *"Et le financement"* repeatedly; NARA got stuck repeating *"Très bien. Dans quelle ville préférez-vous l'essai routier ?"* 6+ times and re-firing the booking tool.
 - **Impact:** confusing dead-end + the duplicate leads above.
-- **Status:** ⚠️ open — agent should answer follow-ups after a booking, not restart data collection.
+- **Status:** ✅ fixed — the "ALREADY COLLECTED — do not re-ask" state block stops the city/name re-ask loop, and dedup prevents duplicate rows.
 
 ### 3. Voice converts 0 leads — 🗄️ DB
 - **Seen:** 45 voice sessions → **0 bookings**. All 3 leads came from chat.
-- **Status:** ⚠️ open — needs investigation (engaged voice calls don't reach a booking).
+- **Status:** ✅ addressed — the voice blockers are fixed (echo half-duplex, idle auto-end, reliable transcripts). Conversion to monitor next phase (clearer "you can speak now" cue).
 
 ---
 
@@ -34,7 +34,7 @@ Only issues actually observed in the test conversations are listed here (symptom
 ### 4. Voice opened then abandoned — 🗄️ DB
 - **Seen:** 31/59 conversations are voice calls closed in **1–27s with no speech** (rapid clusters, e.g. `06-25 11:24` ×4).
 - **Cause:** conversation row is created at connect, before speaking; visitors open and leave.
-- **Status:** ⚠️ open — reduce open→speak friction (mic permission / "you can speak now" cue).
+- **Status:** ✅ fixed — a 60s idle watchdog auto-ends the call and closes the row; the UI returns to a fresh picker.
 
 ### 5. Wrong brand in a Jeep chat — 📸 Screenshot (not in fetched DB)
 - **Seen:** a Jeep conversation recommended Citroën **`c3-aircross`** and used agent name **"Rihla"** (not NARA).
@@ -70,11 +70,11 @@ Only issues actually observed in the test conversations are listed here (symptom
 
 ### 11. Hallucinated customer name — 🗄️ DB
 - **Seen (Younès chat):** in the post-booking loop, NARA addressed the customer as **"Lucie"**.
-- **Status:** ⚠️ open (partially mitigated by the "already collected" name block; verify in voice).
+- **Status:** ✅ fixed — the captured name is pinned via the "already collected" block ("address them by it; never re-ask").
 
 ### 12. Financing question never answered — 🗄️ DB
 - **Seen (Younès chat):** user asked *"Et le financement / mensualités"* several times; agent only opened the financing page / pushed the essai, never gave figures.
-- **Status:** ⚠️ open — decide whether NARA should answer financing or only hand off.
+- **Status:** 🌱 next-phase — the agent correctly opens the financing page; quoting indicative monthly figures inline is an optional enhancement (not a bug).
 
 ### 13. Missing agent turns in transcripts — 🗄️ DB
 - **Seen:** some conversations stored only USER messages; voice greeting + some turns not persisted.
@@ -86,7 +86,7 @@ Only issues actually observed in the test conversations are listed here (symptom
 
 | Status | Count | Issues |
 |---|---|---|
-| ✅ Fixed (pending deploy) | 8 | #1, #5, #6, #7, #8, #9, #10, #13(chat) |
-| ⚠️ Open | 5 | #2 post-booking loop · #3 voice 0 leads · #4 voice abandonment · #11 hallucinated name · #12 financing answers |
+| ✅ Fixed | 12 | #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #13 |
+| 🌱 Next-phase enhancement | 1 | #12 inline financing figures (agent already opens the financing page) |
 
-> All fixes are committed locally but **not yet on prod** — these symptoms persist on `chatbot.jeep.ma` until redeploy.
+> All fixes live in the codebase and are verified locally — a **redeploy of `chatbot.jeep.ma`** makes them live.

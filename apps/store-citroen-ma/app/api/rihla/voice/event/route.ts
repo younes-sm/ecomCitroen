@@ -104,11 +104,17 @@ export async function POST(req: NextRequest) {
       // the dealer back-office, NOT for the customer. The model was reading
       // them as a failure and announcing an error to a customer whose case
       // had actually been created successfully.
+      // Reflect the REAL persistence result. We still hide `warnings` (benign
+      // back-office flags the model used to misread as errors), but a genuine
+      // failure (ok=false) must NOT be masked as success — otherwise the agent
+      // tells the customer "enregistré" while nothing was saved.
       return Response.json({
-        ok: true,
+        ok: result.ok,
         refNumber: result.refNumber,
         salesforceCaseId: result.salesforceCaseId,
-        message: `Appointment saved. Reference: ${result.refNumber}.`,
+        message: result.ok
+          ? `Appointment saved. Reference: ${result.refNumber}.`
+          : `Appointment save failed — ask the customer to confirm one field and retry.`,
       });
     } else if (body.name === "submit_complaint") {
       const result = await persistComplaint({
@@ -120,10 +126,12 @@ export async function POST(req: NextRequest) {
         `[voice/tool] submit_complaint ok=${result.ok} ref=${result.refNumber} caseId=${result.salesforceCaseId ?? "-"} warnings=${result.warnings.join("|") || "-"}`
       );
       return Response.json({
-        ok: true,
+        ok: result.ok,
         refNumber: result.refNumber,
         salesforceCaseId: result.salesforceCaseId,
-        message: `Complaint saved. Reference: ${result.refNumber}.`,
+        message: result.ok
+          ? `Complaint saved. Reference: ${result.refNumber}.`
+          : `Complaint save failed — ask the customer to confirm one field and retry.`,
       });
     }
   } else if (body.kind === "end") {
