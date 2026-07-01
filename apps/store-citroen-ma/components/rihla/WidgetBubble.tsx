@@ -264,13 +264,9 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
     }
   }, [stage, voiceLang, mode, messages.length, brand.slug]);
 
-  // Show greeting teaser briefly when widget loads closed.
-  useEffect(() => {
-    if (embedded || open) return;
-    const t = setTimeout(() => setShowTeaser(true), 1200);
-    const t2 = setTimeout(() => setShowTeaser(false), 8000);
-    return () => { clearTimeout(t); clearTimeout(t2); };
-  }, [embedded, open]);
+  // Greeting teaser disabled — it overlapped and hid the persistent
+  // "Votre assistante virtuelle" label next to the picto. The label now shows
+  // on its own. (Re-enable by restoring the setTimeout(setShowTeaser) below.)
 
   // Most-recent image-card payload (used by the CallView so the customer can
   // SEE the car the agent is talking about during a voice call).
