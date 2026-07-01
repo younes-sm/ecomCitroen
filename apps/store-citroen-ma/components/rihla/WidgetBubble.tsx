@@ -811,6 +811,29 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
               )}
             </AnimatePresence>
 
+            {/* Persistent label next to the picto — highlights the assistant.
+                Shown once the teaser has faded (and always on mobile, where the
+                teaser is hidden). */}
+            {!showTeaser && (
+              <motion.span
+                key="assistant-label"
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.3, ease: [0.22, 0.68, 0, 1] }}
+                className="mb-3 inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-2 text-[11.5px] font-semibold text-white"
+                style={{
+                  background: `linear-gradient(135deg, ${accent} 0%, ${accent}cc 100%)`,
+                  boxShadow: `0 10px 26px -8px ${accent}80, 0 0 0 1px rgba(255,255,255,0.15) inset`,
+                }}
+              >
+                <span aria-hidden className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-70" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-white" />
+                </span>
+                {assistantLabel(voiceLang)}
+              </motion.span>
+            )}
+
             {/* The big FAB with Rihla avatar */}
             <motion.button
               key="fab"
@@ -1369,6 +1392,14 @@ function teaserText(lang: VoiceLang | null, brandFirstWord: string): string {
   if (lang === "ar" || lang === "darija") return `مرحبا ! تحتاج مساعدة لاختيار ${brandFirstWord} ؟`;
   if (lang === "en") return `Hi! Need help picking your ${brandFirstWord}?`;
   return `Bonjour ! Besoin d'aide pour choisir votre ${brandFirstWord} ?`;
+}
+
+/** Persistent label shown beside the collapsed picto to highlight the agent. */
+function assistantLabel(lang: VoiceLang | null): string {
+  if (lang === "ar") return "مساعدتكم الافتراضية";
+  if (lang === "darija") return "المساعدة الافتراضية ديالك";
+  if (lang === "en") return "Your virtual assistant";
+  return "Votre assistante virtuelle";
 }
 
 /** Render an inline string: wraps phone-like digit runs in <bdi dir="ltr"> so
