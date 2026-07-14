@@ -59,8 +59,16 @@ export default async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // ── The Jeep widget itself. ──
-  if (pathname === JEEP_WIDGET || pathname === `${JEEP_WIDGET}/`) {
+  // ── The Jeep widget itself — both embed styles. ──
+  // /w/jeep-ma     → static-iframe integration (legacy)
+  // /embed/jeep-ma → embed.js integration (resizable iframe: the loader
+  //                  listens for the widget's rihla-resize postMessage and
+  //                  shrinks the iframe when closed, so it never blocks
+  //                  clicks on the host page)
+  if (
+    pathname === JEEP_WIDGET || pathname === `${JEEP_WIDGET}/` ||
+    pathname === "/embed/jeep-ma" || pathname === "/embed/jeep-ma/"
+  ) {
     return NextResponse.next();
   }
 

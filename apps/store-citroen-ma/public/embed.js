@@ -56,10 +56,10 @@
     "border: 0",
     "background: transparent",
     "color-scheme: normal",
-    // Sized for the closed FAB by default; resized via postMessage below.
-    // Generous default so the FAB's pulse rings (~135% scale) and shadow
-    // (~40px blur) aren't clipped by the iframe boundary.
-    "width: 140px",
+    // Sized for the closed FAB + "Votre assistante virtuelle" pill by default;
+    // resized via postMessage below. Generous so the FAB's pulse rings and
+    // shadow aren't clipped by the iframe boundary.
+    "width: 340px",
     "height: 140px",
     "transition: width 220ms cubic-bezier(0.22,0.68,0,1), height 220ms cubic-bezier(0.22,0.68,0,1)",
   ].join(";");
@@ -92,7 +92,9 @@
   // open chat panel fits on a phone too. Open size is generous to fit the
   // panel's drop shadow.
   var SIZES = {
-    closed: { w: 140, h: 140 },
+    // Closed = FAB + the persistent "Votre assistante virtuelle" pill to its
+    // side (plus pulse rings / shadow). Wide enough for the longest locale.
+    closed: { w: 340, h: 140 },
     open: {
       w: Math.min(420, window.innerWidth - EDGE_GAP * 2),
       h: Math.min(720, window.innerHeight - EDGE_GAP * 2),
@@ -117,8 +119,8 @@
   // leave the iframe overflowing the viewport.
   window.addEventListener("resize", function () {
     SIZES.open = {
-      w: Math.min(460, window.innerWidth),
-      h: Math.min(760, window.innerHeight),
+      w: Math.min(420, window.innerWidth - EDGE_GAP * 2),
+      h: Math.min(720, window.innerHeight - EDGE_GAP * 2),
     };
   });
 

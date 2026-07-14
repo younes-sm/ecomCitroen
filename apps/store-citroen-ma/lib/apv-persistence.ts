@@ -67,6 +67,24 @@ export async function persistAppointment(args: {
     brandId = (data as unknown as { id?: string } | null)?.id ?? "";
   } catch { /* offline */ }
 
+  // Idempotency — ONE appointment per conversation. book_service_appointment
+  // gets re-fired across turns; without this each call minted a new RDV (the
+  // duplicate-records bug). Return the existing one instead.
+  if (args.conversationId) {
+    try {
+      const supa = adminClient();
+      const { data: existing } = await (supa.from("service_appointments") as any)
+        .select("ref_number")
+        .eq("conversation_id", args.conversationId)
+        .limit(1)
+        .maybeSingle();
+      if (existing?.ref_number) {
+        console.log(`[apv/appointment] dedup — already exists for conv=${args.conversationId} ref=${existing.ref_number}`);
+        return { ok: true, refNumber: existing.ref_number, salesforceCaseId: null, summary: {}, warnings: [] };
+      }
+    } catch { /* best-effort dedup — fall through */ }
+  }
+
   const refNumber = brandId
     ? await nextRefNumber({ brandId, kind: "RDV" })
     : `RDV-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 999).toString().padStart(3, "0")}`;
@@ -217,6 +235,24 @@ export async function persistComplaint(args: {
     const { data } = await supa.from("brands").select("id").eq("slug", args.brandSlug).single();
     brandId = (data as unknown as { id?: string } | null)?.id ?? "";
   } catch { /* offline */ }
+
+  // Idempotency — ONE complaint per conversation. submit_complaint re-fires
+  // across turns; without this each call created a new réclamation (the 16-rows-
+  // for-3-people bug seen in production). Return the existing one instead.
+  if (args.conversationId) {
+    try {
+      const supa = adminClient();
+      const { data: existing } = await (supa.from("complaints") as any)
+        .select("ref_number")
+        .eq("conversation_id", args.conversationId)
+        .limit(1)
+        .maybeSingle();
+      if (existing?.ref_number) {
+        console.log(`[apv/complaint] dedup — already exists for conv=${args.conversationId} ref=${existing.ref_number}`);
+        return { ok: true, refNumber: existing.ref_number, salesforceCaseId: null, summary: {}, warnings: [] };
+      }
+    } catch { /* best-effort dedup — fall through */ }
+  }
 
   const refNumber = brandId
     ? await nextRefNumber({ brandId, kind: "REL" })
