@@ -735,10 +735,16 @@ export function useRihlaLive(
       return;
     }
 
-    // Ephemeral token goes in the same slot the API key used to. Google's
-    // ephemeral tokens are drop-in replacements for the key on the Developer
-    // API surface (used in place of the key, per the Live API token docs).
-    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(liveToken)}`;
+    // Ephemeral tokens are NOT a drop-in for the `?key=` param. Per the SDK
+    // (@google/genai, live.connect), a key starting with "auth_tokens/" must
+    // use a different surface entirely:
+    //   • apiVersion  v1beta  → v1alpha        (tokens are v1alpha-only)
+    //   • method      BidiGenerateContent → BidiGenerateContentConstrained
+    //   • param       ?key=   → ?access_token=
+    // Getting any of these wrong returns close code 1007 "API key not valid".
+    // The token is interpolated raw (not URI-encoded) — it contains a "/" that
+    // the endpoint expects literally, exactly as the SDK sends it.
+    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${liveToken}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
     // Track session duration so unexpected closes ("user said 3 words then it
