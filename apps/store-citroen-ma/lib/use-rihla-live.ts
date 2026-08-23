@@ -611,12 +611,10 @@ export function useRihlaLive(
   // ─── Connect ──────────────────────────────────────────────────────────────
 
   const connect = useCallback(async () => {
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
-    if (!apiKey) {
-      console.error("[rihla-live] NEXT_PUBLIC_GOOGLE_API_KEY not set");
-      updateState("error");
-      return;
-    }
+    // NOTE: no API key in the browser. We fetch a short-lived, single-use
+    // ephemeral token from our own server (/api/rihla/voice/token) below and
+    // use THAT in the WebSocket URL. The real GOOGLE_API_KEY never leaves the
+    // backend.
 
     // In-flight guard: a second connect() while the first is still setting
     // up would stop the mic stream the first call just acquired (the
@@ -694,8 +692,10 @@ export function useRihlaLive(
     });
     let systemPrompt = "";
     let resolvedVoice = voiceName;
+    // Ephemeral token minted server-side — replaces the API key in the WS URL.
+    let liveToken = "";
     try {
-      const [promptResult, voiceResult] = await Promise.all([
+      const [promptResult, voiceResult, tokenResult] = await Promise.all([
         fetch(`/api/rihla/system-prompt?${promptParams}`)
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null) as Promise<{ systemPrompt: string; voiceName?: string } | null>,
@@ -708,12 +708,23 @@ export function useRihlaLive(
               .then((r) => (r.ok ? r.json() : null))
               .catch(() => null) as Promise<{ id?: string } | null>)
           : Promise.resolve(null),
+        fetch("/api/rihla/voice/token", { method: "POST" })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null) as Promise<{ token?: string } | null>,
       ]);
       systemPrompt = promptResult?.systemPrompt ?? "";
       resolvedVoice = promptResult?.voiceName ?? voiceName;
       if (voiceResult?.id) conversationIdRef.current = voiceResult.id;
+      liveToken = tokenResult?.token ?? "";
     } catch (err) {
-      console.warn("[voice] prompt / voice-start fetch failed", err);
+      console.warn("[voice] prompt / voice-start / token fetch failed", err);
+    }
+
+    if (!liveToken) {
+      console.error("[rihla-live] no ephemeral token — cannot open Live session");
+      connectInFlightRef.current = false;
+      updateState("error");
+      return;
     }
 
     // The user may have hit the red button while the prompt was loading —
@@ -724,7 +735,10 @@ export function useRihlaLive(
       return;
     }
 
-    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    // Ephemeral token goes in the same slot the API key used to. Google's
+    // ephemeral tokens are drop-in replacements for the key on the Developer
+    // API surface (used in place of the key, per the Live API token docs).
+    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(liveToken)}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
     // Track session duration so unexpected closes ("user said 3 words then it
