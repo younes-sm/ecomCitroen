@@ -18,7 +18,7 @@
 // Requires @google/genai >= 1.x with the ephemeral-token API (authTokens),
 // which must talk to the v1alpha surface.
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,7 +51,7 @@ export async function POST() {
         liveConnectConstraints: {
           model: LIVE_MODEL,
           config: {
-            responseModalities: ["AUDIO"],
+            responseModalities: [Modality.AUDIO],
           },
         },
       },
