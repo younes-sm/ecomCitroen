@@ -85,7 +85,7 @@ export function RihlaBubble() {
     }
   }, []);
 
-  const live = useRihlaLive(voiceLang ?? locale, "Zephyr", {
+  const live = useRihlaLive(voiceLang ?? locale, "Aoede", {
     onToolCall: handleLiveToolCall,
     onTranscript: handleLiveTranscript,
   });

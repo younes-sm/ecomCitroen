@@ -196,7 +196,7 @@ async function loadFromJsonFallback(slug: string): Promise<FullBrandContext | nu
       primary_color: pickPrimaryColor(slug),
       logo_url: `/brands/${slug}/logo.svg`,
       agent_name: "Rihla",
-      voice_name: "Zephyr",
+      voice_name: "Aoede",
       enabled: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),

@@ -396,7 +396,7 @@ export function WidgetBubble({ brand, availableLangs, embedded = false, postSize
 
   const live = useRihlaLive(
     voiceLang ?? "fr",
-    "Zephyr",
+    "Aoede",
     { onToolCall: handleLiveToolCall, onTranscript: handleLiveTranscript },
     brand.slug
   );

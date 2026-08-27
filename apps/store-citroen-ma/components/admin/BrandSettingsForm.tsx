@@ -19,7 +19,7 @@ const PRESET_COLORS = ["#D90030", "#1A5E2D", "#0E0E10", "#F0CB00", "#005EB8", "#
 
 export function BrandSettingsForm({ brand }: { brand: Brand }) {
   const [color, setColor] = useState(brand.primary_color ?? "#6366f1");
-  const [voice, setVoice] = useState(brand.voice_name ?? "Zephyr");
+  const [voice, setVoice] = useState(brand.voice_name ?? "Aoede");
   const [locales, setLocales] = useState<string[]>(brand.locales);
   const [saved, setSaved] = useState(false);
   const [isPending, startTransition] = useTransition();
