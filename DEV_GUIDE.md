@@ -56,8 +56,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ…       # browser-side, RLS-bound
 SUPABASE_SERVICE_ROLE_KEY=eyJ…           # SERVER ONLY, bypasses RLS
 
 # LLMs
-GOOGLE_API_KEY=AIza…                      # chat (Gemini 3.1 Flash) + voice (Gemini Live)
-NEXT_PUBLIC_GOOGLE_API_KEY=AIza…          # SAME key, exposed to browser for the WebSocket voice connection
+GOOGLE_API_KEY=AIza…                      # SERVER ONLY — chat (Gemini) + voice ephemeral-token mint. Never NEXT_PUBLIC_.
 ANTHROPIC_API_KEY=sk-ant-…                # chat failover (Claude Opus 4.7)
 
 # Scraping (slice 3 — KB content from brand sites)
@@ -68,12 +67,7 @@ ADMIN_PASSWORD=stellantis-demo-2026       # single-tenant gate; replace per envi
 ADMIN_SESSION_SECRET=<random-32-bytes>    # signs the auth cookie
 ```
 
-**Security note:** the voice path connects to Gemini Live directly from the browser using `NEXT_PUBLIC_GOOGLE_API_KEY`. That key is *visible* to anyone who opens devtools. For production, restrict the API key in Google Cloud Console to:
-
-- HTTP referrers: your production domain only
-- API restrictions: `Generative Language API` only (no Cloud Storage, etc.)
-
-Or proxy the voice connection through your server (more code, much safer).
+**Security note:** the voice path no longer exposes any API key to the browser. The widget POSTs `/api/rihla/voice/token`; the server mints a single-use ephemeral token with the session config (system prompt, voice, tools) baked in via `bidiGenerateContentSetup`, and the browser connects to the `v1alpha` `BidiGenerateContentConstrained` WebSocket with that token. `GOOGLE_API_KEY` must exist only as a server env var. IMPORTANT: on the Constrained endpoint the client `setup` message is IGNORED — changing the voice/prompt means changing the MINT (lib/voice-prompt.ts + the token route), not the client.
 
 ---
 
@@ -495,7 +489,7 @@ Honest inventory of what's not yet there. None of these block the demo, but addr
 6. **Phone validation** — only MA + KSA today. Add markets when needed.
 7. **No rate limiting** on `/api/rihla/chat`. Anyone can hammer it. Add per-IP rate limits before going live publicly.
 8. **No CNDP cookie banner**. Required for MA/EU production. Stub a banner before public launch.
-9. **`NEXT_PUBLIC_GOOGLE_API_KEY` is exposed to the browser**. See §3 — restrict the key in GCP or proxy the WS connection.
+9. ~~`NEXT_PUBLIC_GOOGLE_API_KEY` exposed to the browser~~ — FIXED: voice now uses server-minted ephemeral tokens (see §3). The env var is unused; remove it from Vercel.
 10. **Single admin password**. Add per-brand admin users + audit log when production needs it.
 11. **No KPI dashboards on the new APV tables** yet. The `/admin/{brand}` dashboard still only counts sales leads. Extend the analytics queries to include appointments + complaints.
 12. **Eval harness** — none. We've been testing manually. Before each prompt change, run a 12-conversation script per locale to catch regressions. Mandatory before scaling beyond the demo.

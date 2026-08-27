@@ -34,218 +34,6 @@ type GeminiMsg =
       };
     };
 
-// ─── Tool declarations for the live session ─────────────────────────────────
-
-const LIVE_TOOLS = [
-  {
-    functionDeclarations: [
-      {
-        name: "configure_car",
-        description: "Change the color, trim or angle of the car on the current page. MUST be called when user asks to change color (بدل اللون, mets en rouge).",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            slug: { type: "STRING", enum: ["c3-aircross", "c5-aircross", "berlingo"] },
-            color: { type: "STRING" },
-            trim: { type: "STRING" },
-          },
-        },
-      },
-      {
-        name: "open_model",
-        description: "Open a model detail page (بغيت نشوف, montre-moi).",
-        parameters: {
-          type: "OBJECT",
-          properties: { slug: { type: "STRING", enum: ["c3-aircross", "c5-aircross", "berlingo"] } },
-          required: ["slug"],
-        },
-      },
-      {
-        name: "start_reservation",
-        description: "Open the reservation page to book this car.",
-        parameters: {
-          type: "OBJECT",
-          properties: { slug: { type: "STRING" } },
-          required: ["slug"],
-        },
-      },
-      {
-        name: "open_financing",
-        description: "Open the financing advisor page or run a financing simulation.",
-        parameters: { type: "OBJECT", properties: {} },
-      },
-      {
-        name: "open_dealers",
-        description: "Open the dealer locator page.",
-        parameters: { type: "OBJECT", properties: {} },
-      },
-      {
-        name: "calculate_financing",
-        description: "Calculate monthly payment for a car. Call when user asks about price, mensualité, budget.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            vehiclePrice: { type: "NUMBER" },
-            downPayment: { type: "NUMBER" },
-            termMonths: { type: "NUMBER" },
-            annualRatePct: { type: "NUMBER" },
-          },
-          required: ["vehiclePrice"],
-        },
-      },
-      {
-        name: "show_model_image",
-        description: "Display a photo of a specific model inline in the chat. Call when you recommend a model or the user asks to see one.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            slug: { type: "STRING", description: "The model slug (e.g. 'wrangler', 'c3-aircross', '5008')." },
-            caption: { type: "STRING", description: "Optional one-line caption shown under the image." },
-          },
-          required: ["slug"],
-        },
-      },
-      {
-        name: "show_model_video",
-        description: "Display a video preview card for a model — opens YouTube search in a new tab. Use when user asks for a video, walk-around, or review.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            slug: { type: "STRING", description: "The model slug." },
-            caption: { type: "STRING", description: "Optional one-line caption." },
-          },
-          required: ["slug"],
-        },
-      },
-      {
-        name: "open_brand_page",
-        description: "Open the official brand-site page for a model in a new browser tab. Use when the user wants to see more details, specs, or configure on the official site.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            slug: { type: "STRING", description: "The model slug." },
-          },
-          required: ["slug"],
-        },
-      },
-      {
-        name: "book_test_drive",
-        description: "Book a TEST DRIVE for a qualified lead. MANDATORY : you MUST call this tool the moment the customer says 'oui' / 'yes' / any affirmative TO THE CNDP CONSENT QUESTION (loi 09-08). NEVER respond with confirmation text alone ('Parfait, je transmets votre demande...') without ALSO calling this tool in the SAME turn — that would silently drop the lead, which is the #1 voice bug clients have flagged. Fill firstName, phone, email (if provided), city, preferredSlot, showroomName from the conversation history. CNDP consent is implicit in the customer's just-given 'oui'.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            slug: { type: "STRING" },
-            firstName: { type: "STRING" },
-            phone: { type: "STRING" },
-            email: { type: "STRING", description: "Customer email — optional. Ask once after phone; accept if customer prefers not to share." },
-            city: { type: "STRING" },
-            preferredSlot: { type: "STRING" },
-            showroomName: { type: "STRING", description: "The exact showroom the customer chose from find_showrooms (e.g. 'Peugeot Riyadh — King Fahd Rd'). Verbatim." },
-          },
-          required: ["slug", "firstName", "phone"],
-        },
-      },
-      {
-        name: "book_showroom_visit",
-        description: "Schedule a SHOWROOM VISIT (the user wants to come see the cars in person, not test-drive). MANDATORY : call this the moment the customer says 'oui' to the CNDP question. NEVER emit confirmation text without ALSO calling this tool in the same turn — that drops the lead silently.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            slug: { type: "STRING" },
-            firstName: { type: "STRING" },
-            phone: { type: "STRING" },
-            email: { type: "STRING", description: "Customer email — optional. Ask once after phone." },
-            city: { type: "STRING" },
-            preferredSlot: { type: "STRING" },
-            showroomName: { type: "STRING", description: "The exact showroom the customer chose. Verbatim." },
-          },
-          required: ["firstName", "phone"],
-        },
-      },
-      {
-        name: "find_showrooms",
-        description: "List nearby showrooms / dealers. CALL THIS whenever the user names a city ('I'm in Riyadh', 'Casablanca', 'Jeddah') or asks where to find the cars / book a visit / find a service centre. Renders a card list with names, addresses, phones, hours. After calling, briefly summarize ('I found 3 in Riyadh — would you like to visit one?').",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            city: { type: "STRING", description: "City name as the user said it. Empty/undefined to list all showrooms." },
-          },
-        },
-      },
-      {
-        name: "end_call",
-        description: "END THE CALL — call this IMMEDIATELY after your closing line whenever the user signals they're done. Triggers (any language, partial match): 'bye', 'goodbye', 'thanks', 'thank you', 'au revoir', 'merci', 'à bientôt', 'bonne journée', 'salut', 'شكرا', 'شكراً', 'بسلامة', 'في أمان الله', 'مع السلامة', 'يالله', 'يالاه', 'صافي', 'خلاص', 'تمام', 'تسلم', 'الله يعطيك العافية'. ALSO call after a successful book_test_drive + farewell. Never continue after a farewell — end_call is the only valid response.",
-        parameters: { type: "OBJECT", properties: {} },
-      },
-      {
-        name: "request_input",
-        description: "MANDATORY in voice — open the on-screen keyboard whenever you ask the customer to type a sensitive field (name, phone, email, VIN). Voice dictation is refused for these 4 fields. Call on the SAME turn as your text instruction ('Tapez votre prénom, …'). For VIN, this also surfaces the carte-grise camera + upload buttons.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            field: { type: "STRING", enum: ["name", "phone", "email", "vin"] },
-          },
-          required: ["field"],
-        },
-      },
-      // ─── APV (after-sales) — Jeep widget only. Never call for other brands. ───
-      {
-        name: "lookup_vin",
-        description: "APV ONLY. Look up a customer by VIN to pre-fill the form. Call as soon as the customer says their VIN (17 alphanumeric chars).",
-        parameters: {
-          type: "OBJECT",
-          properties: { vin: { type: "STRING" } },
-          required: ["vin"],
-        },
-      },
-      {
-        name: "book_service_appointment",
-        description: "APV ONLY. MANDATORY : call this tool the moment the customer says 'oui' / 'yes' / any affirmative to the CNDP question. NEVER emit confirmation text ('Parfait, je transmets...') without ALSO calling this tool in the SAME turn — that drops the lead silently. Set cndpConsent=true (the customer just gave it).",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            fullName: { type: "STRING" },
-            phone: { type: "STRING" },
-            email: { type: "STRING" },
-            vehicleBrand: { type: "STRING" },
-            vehicleModel: { type: "STRING" },
-            vin: { type: "STRING" },
-            interventionType: { type: "STRING", enum: ["service_rapide", "mechanical", "bodywork"] },
-            city: { type: "STRING" },
-            preferredDate: { type: "STRING" },
-            preferredSlot: { type: "STRING", enum: ["morning", "afternoon"] },
-            comment: { type: "STRING" },
-            cndpConsent: { type: "BOOLEAN" },
-          },
-          required: ["fullName", "phone", "email", "vehicleBrand", "vehicleModel", "vin", "interventionType", "city", "preferredDate", "preferredSlot", "cndpConsent"],
-        },
-      },
-      {
-        name: "submit_complaint",
-        description: "APV ONLY. MANDATORY : call this the moment the customer says 'oui' to the CNDP question. NEVER emit confirmation text without ALSO calling this tool in the same turn — that drops the complaint silently. Set cndpConsent=true. vin / vehicleModel / interventionType are OPTIONAL — only fill them for a complaint about a vehicle or a service/repair; OMIT them for a complaint about staff behaviour, reception, pricing, or wait time.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            fullName: { type: "STRING" },
-            phone: { type: "STRING" },
-            email: { type: "STRING" },
-            vehicleBrand: { type: "STRING" },
-            vehicleModel: { type: "STRING" },
-            vin: { type: "STRING" },
-            interventionType: { type: "STRING", enum: ["service_rapide", "mechanical", "bodywork"] },
-            site: { type: "STRING" },
-            serviceDate: { type: "STRING" },
-            reason: { type: "STRING" },
-            attachmentUrl: { type: "STRING" },
-            cndpConsent: { type: "BOOLEAN" },
-          },
-          required: ["fullName", "phone", "email", "vehicleBrand", "site", "reason", "cndpConsent"],
-        },
-      },
-    ],
-  },
-];
-
 // ─── Hook ───────────────────────────────────────────────────────────────────
 
 export function useRihlaLive(
@@ -611,13 +399,6 @@ export function useRihlaLive(
   // ─── Connect ──────────────────────────────────────────────────────────────
 
   const connect = useCallback(async () => {
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
-    if (!apiKey) {
-      console.error("[rihla-live] NEXT_PUBLIC_GOOGLE_API_KEY not set");
-      updateState("error");
-      return;
-    }
-
     // In-flight guard: a second connect() while the first is still setting
     // up would stop the mic stream the first call just acquired (the
     // "mic opens, closes, opens again" flicker). Bail if a session is
@@ -687,18 +468,24 @@ export function useRihlaLive(
     // had already killed the socket, and ws.send() threw "WebSocket is
     // already in CLOSING or CLOSED state". Fetching first means onopen can
     // fire setup synchronously, the instant the socket is ready.
-    const promptParams = new URLSearchParams({
-      locale,
-      voice: "1",
-      ...(brandSlug ? { brand: brandSlug } : {}),
-    });
-    let systemPrompt = "";
+    // Mint the ephemeral session token + register the voice conversation
+    // BEFORE opening the WebSocket. The token mint composes the system prompt
+    // server-side and bakes it — with the brand voice and the tool
+    // declarations — into the token (bidiGenerateContentSetup), so the
+    // browser never sees GOOGLE_API_KEY and the Constrained endpoint gets its
+    // config the only way it accepts it. Fetching first also means onopen can
+    // fire setup synchronously (Gemini kills sockets whose setup arrives late).
+    let sessionToken: string | null = null;
     let resolvedVoice = voiceName;
     try {
-      const [promptResult, voiceResult] = await Promise.all([
-        fetch(`/api/rihla/system-prompt?${promptParams}`)
+      const [tokenResult, voiceResult] = await Promise.all([
+        fetch("/api/rihla/voice/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brandSlug, locale }),
+        })
           .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null) as Promise<{ systemPrompt: string; voiceName?: string } | null>,
+          .catch(() => null) as Promise<{ token?: string; voiceName?: string } | null>,
         brandSlug
           ? (fetch("/api/rihla/voice/start", {
               method: "POST",
@@ -709,11 +496,23 @@ export function useRihlaLive(
               .catch(() => null) as Promise<{ id?: string } | null>)
           : Promise.resolve(null),
       ]);
-      systemPrompt = promptResult?.systemPrompt ?? "";
-      resolvedVoice = promptResult?.voiceName ?? voiceName;
+      sessionToken = tokenResult?.token ?? null;
+      resolvedVoice = tokenResult?.voiceName ?? voiceName;
       if (voiceResult?.id) conversationIdRef.current = voiceResult.id;
     } catch (err) {
-      console.warn("[voice] prompt / voice-start fetch failed", err);
+      console.warn("[voice] token / voice-start fetch failed", err);
+    }
+    if (!sessionToken) {
+      // If the user already hung up while the mint was in flight (disconnect()
+      // cleared connectInFlightRef), stay silent: forcing "error" here would
+      // overwrite the "idle" state WidgetBubble's auto-start effect needs, and
+      // the next attempt to open voice would silently land in text chat.
+      if (connectInFlightRef.current) {
+        console.error("%c[voice] ✗ could not mint a session token — voice unavailable", "color:#ef4444;font-weight:bold");
+        connectInFlightRef.current = false;
+        updateState("error");
+      }
+      return;
     }
 
     // The user may have hit the red button while the prompt was loading —
@@ -724,7 +523,9 @@ export function useRihlaLive(
       return;
     }
 
-    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    // v1alpha Constrained endpoint: authenticated by the single-use ephemeral
+    // token; ALL session config comes from the token's bidiGenerateContentSetup.
+    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${sessionToken}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
     // Track session duration so unexpected closes ("user said 3 words then it
@@ -741,24 +542,13 @@ export function useRihlaLive(
       void persistEvent({ kind: "ws_diag", phase: "open" });
       // Send setup IMMEDIATELY — the prompt is already in hand, no awaiting.
       try {
-        ws.send(
-          JSON.stringify({
-            setup: {
-              model: "models/gemini-3.1-flash-live-preview",
-              generationConfig: {
-                responseModalities: ["AUDIO"],
-                speechConfig: {
-                  voiceConfig: { prebuiltVoiceConfig: { voiceName: resolvedVoice } },
-                },
-              },
-              // Transcribe both sides so we can persist them.
-              inputAudioTranscription: {},
-              outputAudioTranscription: {},
-              systemInstruction: { parts: [{ text: systemPrompt }] },
-              tools: LIVE_TOOLS,
-            },
-          })
-        );
+        // Constrained sessions IGNORE client-side setup content — the system
+        // prompt, voice, tools and transcription flags are enforced from the
+        // token mint (see /api/rihla/voice/token). Send only the model id to
+        // complete the handshake; anything more here is dead weight that
+        // suggests it does something (it doesn't — that misunderstanding is
+        // what shipped the promptless-voice bug).
+        ws.send(JSON.stringify({ setup: { model: "models/gemini-3.1-flash-live-preview" } }));
         console.log(
           `%c[voice] ✅ SESSION READY — conv=${conversationIdRef.current ?? "n/a"} voice=${resolvedVoice}`,
           "color:#22c55e;font-weight:bold"
