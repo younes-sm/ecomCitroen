@@ -140,13 +140,25 @@ export async function fetchRecentMessages(
   const supa = client();
   if (!supa) return [];
   try {
-    const { data } = await (supa.from("messages") as any)
-      .select("role, kind, text, created_at")
+    // The column is `content`, NOT `text` — selecting "text" made PostgREST
+    // return 42703 ("column messages.text does not exist"), so `data` came
+    // back null and this returned [] for EVERY conversation. That silently
+    // disabled the whole stalled-booking recovery path (no messages → no
+    // fake-confirmation detection → no lead recovered). Alias it to `text`
+    // so callers keep the same shape.
+    const { data, error } = await (supa.from("messages") as any)
+      .select("role, kind, text:content, created_at")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: false })
       .limit(limit);
+    if (error) {
+      // Never swallow this again — a schema drift here disables lead recovery.
+      console.error(`[persistence] fetchRecentMessages failed: ${error.message}`);
+      return [];
+    }
     return Array.isArray(data) ? data : [];
-  } catch {
+  } catch (err) {
+    console.error(`[persistence] fetchRecentMessages threw: ${(err as Error).message}`);
     return [];
   }
 }

@@ -147,10 +147,23 @@ export async function POST(req: NextRequest) {
         const messages = await fetchRecentMessages(body.conversationId, 40);
         // Detect the fake-confirmation pattern : last assistant turn mentions
         // "transmets votre demande" / "demande est enregistrée" / equivalents.
-        const lastAgent = messages.find(
-          (m) => m.role === "assistant" && (m.kind === "text" || m.kind === "transcript") && m.text
+        // `messages` is newest-first, so .find() used to return the FAREWELL
+        // ("Merci pour votre confiance…") rather than the confirmation turn —
+        // the pattern was tested against the wrong message. Scan the last few
+        // assistant turns instead, so a trailing goodbye can't mask it.
+        const recentAgentTurns = messages
+          .filter((m) => m.role === "assistant" && (m.kind === "text" || m.kind === "transcript") && m.text)
+          .slice(0, 5);
+        // Loosened to match how the agent actually speaks. The old pattern
+        // required "transmets votre demande" / "demande est enregistrée", but
+        // real transcripts say "nous transmettONS votre demande" and "votre
+        // demande est BIEN enregistrée" — neither matched, so recovery never
+        // fired even once the transcript was readable.
+        const FAKE_CONFIRMATION_RE =
+          /(transmet\w*\s+votre\s+demande|demande\s+est\s+(?:bien\s+)?enregistr|conseiller\s+va\s+(?:vous\s+)?prendre\s+contact|prendre\s+contact\s+avec\s+vous|votre\s+référence\s+est|كنصيفط|تم\s+تسجيل|registered|will\s+reach\s+out)/i;
+        const fakeConfirmation = recentAgentTurns.some(
+          (m) => !!m.text && FAKE_CONFIRMATION_RE.test(m.text)
         );
-        const fakeConfirmation = !!lastAgent?.text && /(transmets\s+votre\s+demande|demande\s+est\s+enregistrée|كنصيفط|تم\s+تسجيل|registered|will\s+reach\s+out)/i.test(lastAgent.text);
         // CNDP pattern : any earlier assistant turn contained the loi 09-08 line.
         const cndpAsked = messages.some(
           (m) => m.role === "assistant" && !!m.text && /(09[-\s]?08|loi\s+09|conformément|stellantis\s+maroc|protection\s+des\s+données|توافقون|الموافقة|data[-\s]protection)/i.test(m.text)
@@ -160,7 +173,16 @@ export async function POST(req: NextRequest) {
           // repair keywords. APV → persistAppointment (book_service_-
           // appointment). SALES → captureLeadFromBooking (book_test_drive).
           const transcriptBlob = messages.map((m) => m.text ?? "").join(" ");
-          const isApv = /\b(vidange|r[ée]vision|entretien|service\s+rapide|pneus?|freins?|panne|voyant|moteur|carrosserie|m[ée]canique|rendez-?vous\s+atelier|atelier|réclamation)\b|فيدونج|صيانة|بنوات|فرام|خسرت|كنشكي|service\s+apres/i.test(transcriptBlob);
+          // APV detection must read what the CUSTOMER asked for, not the
+          // agent's opening spiel — the greeting lists every capability
+          // ("…financement, entretien et service après vente"), so scanning
+          // the whole transcript classified a pure test-drive booking as APV
+          // and would have filed a service appointment instead of a lead.
+          const userBlob = messages
+            .filter((m) => m.role === "user")
+            .map((m) => m.text ?? "")
+            .join(" ");
+          const isApv = /\b(vidange|r[ée]vision|entretien|service\s+rapide|pneus?|freins?|panne|voyant|moteur|carrosserie|m[ée]canique|rendez-?vous\s+atelier|atelier|réclamation)\b|فيدونج|صيانة|بنوات|فرام|خسرت|كنشكي|service\s+apres/i.test(userBlob);
           console.error(
             `[voice/diag] STALLED BOOKING DETECTED on end_call. conv=${body.conversationId} — flow=${isApv ? "APV" : "SALES"} — attempting field recovery.`
           );
@@ -175,13 +197,19 @@ export async function POST(req: NextRequest) {
           // First name — prefer the typed user message that came right
           // after the name ask (typed name comes through as a short letter-
           // only token, e.g. "younes").
+          // `messages` arrives NEWEST-FIRST. The old loop scanned j = i+1
+          // onwards looking for the user's reply, which on a newest-first list
+          // walks BACKWARDS in time — so it never saw the actual answer and
+          // latched onto an unrelated earlier turn (it picked "Casablanca" as
+          // the first name on a real call). Work on a chronological copy.
+          const chrono = [...messages].reverse();
           let firstName: string | undefined;
-          for (let i = 0; i < messages.length; i++) {
-            const a = messages[i];
+          for (let i = 0; i < chrono.length; i++) {
+            const a = chrono[i];
             if (a?.role !== "assistant" || !a.text) continue;
             if (!/(votre\s+pr[ée]nom|tapez\s+votre\s+pr[ée]nom|اسمكم|سميتك|كتب\s+السمية|your\s+first\s+name)/i.test(a.text)) continue;
-            for (let j = i + 1; j < messages.length; j++) {
-              const u = messages[j];
+            for (let j = i + 1; j < chrono.length; j++) {
+              const u = chrono[j];
               if (u?.role !== "user" || !u.text) continue;
               const t = u.text.trim();
               if (/^[\p{L}'-]{2,30}$/u.test(t) && !/@/.test(t) && !/^\d/.test(t)) {
