@@ -76,7 +76,7 @@ const STORAGE_KEY = (slug: string) => `widget-state-${slug}`;
 // `{"field":"phone"}` / dangling `"phone"}` as text instead of a structured
 // function call) never renders as a chat bubble. Conservative — requires the
 // parens/braces that normal prose never has, so real replies pass untouched.
-const TOOL_NAMES_RE = "request_input|find_showrooms|show_model_image|show_model_video|configure_car|open_model|book_test_drive|book_showroom_visit|book_service_appointment|submit_complaint|calculate_financing|open_brand_page|open_financing|open_dealers|start_reservation|lookup_vin|end_call";
+const TOOL_NAMES_RE = "request_input|find_showrooms|show_model_image|show_model_video|configure_car|open_model|book_test_drive|book_showroom_visit|book_service_appointment|submit_complaint|open_brand_page|lookup_vin|end_call";
 const TOOL_LEAK_CALL_RE = new RegExp(`\\b(?:${TOOL_NAMES_RE})\\s*\\([^)]*\\)`, "gi");
 function stripToolLeak(s: string): string {
   let out = s;

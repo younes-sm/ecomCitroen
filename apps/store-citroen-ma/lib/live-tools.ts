@@ -26,7 +26,7 @@ export const LIVE_TOOLS = [
         parameters: {
           type: "OBJECT",
           properties: {
-            slug: { type: "STRING", enum: ["c3-aircross", "c5-aircross", "berlingo"] },
+            slug: { type: "STRING", enum: ["avenger", "compass", "wrangler", "grand-cherokee", "renegade"] },
             color: { type: "STRING" },
             trim: { type: "STRING" },
           },
@@ -37,41 +37,8 @@ export const LIVE_TOOLS = [
         description: "Open a model detail page (بغيت نشوف, montre-moi).",
         parameters: {
           type: "OBJECT",
-          properties: { slug: { type: "STRING", enum: ["c3-aircross", "c5-aircross", "berlingo"] } },
+          properties: { slug: { type: "STRING", enum: ["avenger", "compass", "wrangler", "grand-cherokee", "renegade"] } },
           required: ["slug"],
-        },
-      },
-      {
-        name: "start_reservation",
-        description: "Open the reservation page to book this car.",
-        parameters: {
-          type: "OBJECT",
-          properties: { slug: { type: "STRING" } },
-          required: ["slug"],
-        },
-      },
-      {
-        name: "open_financing",
-        description: "Open the financing advisor page or run a financing simulation.",
-        parameters: { type: "OBJECT", properties: {} },
-      },
-      {
-        name: "open_dealers",
-        description: "Open the dealer locator page.",
-        parameters: { type: "OBJECT", properties: {} },
-      },
-      {
-        name: "calculate_financing",
-        description: "Calculate monthly payment for a car. Call when user asks about price, mensualité, budget.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            vehiclePrice: { type: "NUMBER" },
-            downPayment: { type: "NUMBER" },
-            termMonths: { type: "NUMBER" },
-            annualRatePct: { type: "NUMBER" },
-          },
-          required: ["vehiclePrice"],
         },
       },
       {

@@ -298,16 +298,12 @@ export function dispatchRihlaTool(call: RihlaToolCall, ctx: DispatchCtx): string
 
   try {
     switch (name) {
-      case "navigate_to": {
-        // Legacy storefront-only tool. In widget mode, ignore.
-        if (widgetMode) return "navigate_to is disabled in widget mode";
-        const raw = String(input.path ?? "/");
-        const path = raw.startsWith("/") ? raw : `/${raw}`;
-        const localePrefixed = path.startsWith(`/${locale}`) ? path : `/${locale}${path}`;
-        if (currentPath === localePrefixed) return "already on that page";
-        router.push(localePrefixed);
-        return `navigated to ${localePrefixed}`;
-      }
+      // navigate_to / scroll_to / start_reservation / open_dealers /
+      // open_financing / calculate_financing were removed with the Jeep-only
+      // cleanup: they only drove the legacy Citroën storefront (router.push
+      // is a no-op in the embedded widget) and calculate_financing carried a
+      // Citroën price map. The emit/on event helpers above are kept — the
+      // storefront components still import them.
       case "show_model_image": {
         const slug = String(input.slug ?? input.modelSlug ?? "");
         const model = slug ? findModel(slug) : undefined;
@@ -427,29 +423,6 @@ export function dispatchRihlaTool(call: RihlaToolCall, ctx: DispatchCtx): string
         emitConfiguratorChange(change);
         return `updated configurator with ${JSON.stringify(change)}`;
       }
-      case "scroll_to": {
-        const section = String(input.section ?? "");
-        emitScrollTo(section);
-        return `scrolled to ${section}`;
-      }
-      case "start_reservation": {
-        const slug = String(input.slug ?? "c3-aircross");
-        const target = `/${locale}/reserve/${slug}`;
-        if (currentPath === target) return "already on reservation";
-        router.push(target);
-        return `started reservation for ${slug}`;
-      }
-      case "open_dealers": {
-        const target = `/${locale}/dealers`;
-        if (currentPath === target) return "already on dealers";
-        router.push(target);
-        return "opened dealers page";
-      }
-      case "open_financing": {
-        const target = `/${locale}/financing`;
-        if (currentPath !== target) router.push(target);
-        return "opened financing advisor";
-      }
       case "end_call": {
         emitEndCall();
         return "call ended";
@@ -535,35 +508,6 @@ export function dispatchRihlaTool(call: RihlaToolCall, ctx: DispatchCtx): string
         };
         emitTestDrive(payload);
         return `test drive booked for ${payload.firstName ?? "lead"} (${payload.phone ?? "no phone"}) on ${payload.slug ?? "model"}`;
-      }
-      case "calculate_financing": {
-        const update: FinancingUpdate = {};
-        if (typeof input.slug === "string") update.modelSlug = input.slug;
-        if (typeof input.vehiclePrice === "number") {
-          // Map price to model slug
-          const priceMap: Record<number, string> = { 234900: "c3-aircross", 295900: "c5-aircross", 195900: "berlingo" };
-          update.modelSlug = priceMap[input.vehiclePrice] ?? update.modelSlug;
-        }
-        if (typeof input.downPayment === "number") update.downPayment = input.downPayment;
-        if (typeof input.termMonths === "number") update.termMonths = input.termMonths;
-        if (typeof input.tradeIn === "number") update.tradeIn = input.tradeIn;
-
-        // Navigate to financing page if not already there
-        const finTarget = `/${locale}/financing`;
-        if (currentPath !== finTarget) router.push(finTarget);
-
-        // Emit the update so the form picks it up
-        setTimeout(() => emitFinancingUpdate(update), 500);
-
-        // Run the calculation locally and return the result to the model
-        const price = input.vehiclePrice as number || 234900;
-        const dp = (input.downPayment as number) || 0;
-        const months = (input.termMonths as number) || 60;
-        const rate = (input.annualRatePct as number) || 5.99;
-        const principal = price - dp;
-        const mr = rate / 100 / 12;
-        const monthly = mr === 0 ? principal / months : (principal * mr * Math.pow(1 + mr, months)) / (Math.pow(1 + mr, months) - 1);
-        return `Financing: ${Math.round(monthly)} MAD/month over ${months} months, principal ${principal} MAD, rate ${rate}%`;
       }
       default:
         return `unknown tool: ${name}`;

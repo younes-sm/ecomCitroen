@@ -187,7 +187,6 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "- open_model(slug) → Ouvrir la page du modèle (côté brand-site, nouvel onglet).",
     "- show_model_image(slug, angle?) → Afficher une image du modèle inline dans la conversation.",
     "- open_brand_page(slug) → Ouvrir la page officielle du modèle sur le site de la marque (nouvel onglet).",
-    "- calculate_financing(price, downPayment, term) → Calculer la mensualité.",
     "- book_test_drive(slug, firstName, phone, city, slot) → Réserver l'essai.",
     "- end_call() → Terminer l'appel après l'au revoir.",
     "",

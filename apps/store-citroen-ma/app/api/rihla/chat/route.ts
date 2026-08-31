@@ -363,16 +363,6 @@ const GEMINI_NAV_TOOLS: Tool[] = [
   {
     functionDeclarations: [
       {
-        name: "navigate_to",
-        description:
-          "Navigate the browser to a site path (/models, /dealers, /financing, /account, /orders, /service, /legal, /privacy, /terms).",
-        parameters: {
-          type: Type.OBJECT,
-          properties: { path: { type: Type.STRING } },
-          required: ["path"],
-        },
-      },
-      {
         name: "open_model",
         description:
           "Open a specific model detail page when the user shows interest in one model.",
@@ -381,7 +371,7 @@ const GEMINI_NAV_TOOLS: Tool[] = [
           properties: {
             slug: {
               type: Type.STRING,
-              enum: ["c3-aircross", "c5-aircross", "berlingo"],
+              enum: ["avenger", "compass", "wrangler", "grand-cherokee", "renegade"],
             },
           },
           required: ["slug"],
@@ -396,41 +386,12 @@ const GEMINI_NAV_TOOLS: Tool[] = [
           properties: {
             slug: {
               type: Type.STRING,
-              enum: ["c3-aircross", "c5-aircross", "berlingo"],
+              enum: ["avenger", "compass", "wrangler", "grand-cherokee", "renegade"],
             },
             color: { type: Type.STRING },
             trim: { type: Type.STRING },
             angle: { type: Type.NUMBER },
           },
-        },
-      },
-      {
-        name: "start_reservation",
-        description: "Start the reservation flow for a model.",
-        parameters: {
-          type: Type.OBJECT,
-          properties: { slug: { type: Type.STRING } },
-          required: ["slug"],
-        },
-      },
-      {
-        name: "open_dealers",
-        description: "Open the dealer locator page.",
-        parameters: { type: Type.OBJECT, properties: {} },
-      },
-      {
-        name: "open_financing",
-        description: "Open the financing advisor page.",
-        parameters: { type: Type.OBJECT, properties: {} },
-      },
-      {
-        name: "scroll_to",
-        description:
-          "Scroll to a named section on the current page. Sections: 'range', 'configurator', 'gallery', 'features', 'specs', 'cta'.",
-        parameters: {
-          type: Type.OBJECT,
-          properties: { section: { type: Type.STRING } },
-          required: ["section"],
         },
       },
       {
@@ -586,13 +547,8 @@ const GEMINI_NAV_TOOLS: Tool[] = [
 
 /** Anthropic tool schemas (fallback path). */
 const ANTHROPIC_NAV_TOOLS: Anthropic.Messages.Tool[] = [
-  { name: "navigate_to", description: "Navigate to a site path.", input_schema: { type: "object" as const, properties: { path: { type: "string" as const } }, required: ["path"] } },
-  { name: "open_model", description: "Open a model detail page.", input_schema: { type: "object" as const, properties: { slug: { type: "string" as const, enum: ["c3-aircross", "c5-aircross", "berlingo"] } }, required: ["slug"] } },
+  { name: "open_model", description: "Open a model detail page.", input_schema: { type: "object" as const, properties: { slug: { type: "string" as const, enum: ["avenger", "compass", "wrangler", "grand-cherokee", "renegade"] } }, required: ["slug"] } },
   { name: "configure_car", description: "Update configurator on the CURRENT page without reloading.", input_schema: { type: "object" as const, properties: { slug: { type: "string" as const }, color: { type: "string" as const }, trim: { type: "string" as const }, angle: { type: "number" as const } }, required: [] } },
-  { name: "start_reservation", description: "Start reservation.", input_schema: { type: "object" as const, properties: { slug: { type: "string" as const } }, required: ["slug"] } },
-  { name: "open_dealers", description: "Open dealers.", input_schema: { type: "object" as const, properties: {}, required: [] } },
-  { name: "open_financing", description: "Open financing.", input_schema: { type: "object" as const, properties: {}, required: [] } },
-  { name: "scroll_to", description: "Scroll to section.", input_schema: { type: "object" as const, properties: { section: { type: "string" as const } }, required: ["section"] } },
   { name: "show_model_image", description: "Display a photo of a specific model inline in the chat.", input_schema: { type: "object" as const, properties: { slug: { type: "string" as const }, caption: { type: "string" as const } }, required: ["slug"] } },
   { name: "show_model_video", description: "Display a video preview card (opens YouTube in a new tab) for a model. Use when the user asks for a video, walk-around, or review.", input_schema: { type: "object" as const, properties: { slug: { type: "string" as const }, caption: { type: "string" as const } }, required: ["slug"] } },
   { name: "open_brand_page", description: "Open the official brand-site page for a model in a new browser tab.", input_schema: { type: "object" as const, properties: { slug: { type: "string" as const } }, required: ["slug"] } },
@@ -620,12 +576,11 @@ function buildPromptSuffix(
     "- Never mention the words 'tool', 'function', 'API'.",
     "",
     "TOOL CALL EXAMPLES (bilingual — always call the tool, in any language):",
-    "- FR: 'Mets-la en rouge' → say 'Je vous la mets en rouge.' then call configure_car(slug='c3-aircross', color='red')",
-    "- AR/Darija: 'بدل اللون للحمر' → say 'واخا، غادي نبدلها بالحمر!' then call configure_car(slug='c3-aircross', color='red')",
-    "- FR: 'Montre-moi le Berlingo' → say 'Je vous ouvre le Berlingo.' then call open_model(slug='berlingo')",
-    "- AR/Darija: 'بغيت نشوف البرلينجو' → say 'واخا، هاهو البرلينجو!' then call open_model(slug='berlingo')",
-    "- FR: 'Je veux réserver' → say 'Allez, on y va!' then call start_reservation(slug='...')",
-    "- AR/Darija: 'بغيت نحجز' → say 'يالاه!' then call start_reservation(slug='...')"
+    "- FR: 'Mets-la en rouge' → say 'Je vous la mets en rouge.' then call configure_car(slug='avenger', color='red')",
+    "- AR/Darija: 'بدل اللون للحمر' → say 'واخا، غادي نبدلها بالحمر!' then call configure_car(slug='avenger', color='red')",
+    "- FR: 'Montre-moi le Compass' → say 'Je vous montre le Compass.' then call open_model(slug='compass')",
+    "- AR/Darija: 'بغيت نشوف كومباس' → say 'واخا، هاهو الكومباس!' then call open_model(slug='compass')",
+    "- FR: 'Je veux réserver / essayer' → collect the booking fields, then call book_test_drive(...)"
   );
   if (pageContext?.path) parts.push(`- Current page: ${pageContext.path}.`);
   if (pageContext?.modelSlug) parts.push(`- Viewing model: ${pageContext.modelSlug}.`);
@@ -684,21 +639,21 @@ function detectIntent(
     return { name: "configure_car", input: { slug, color: colorMap[rawColor] ?? rawColor } };
   }
 
-  // Model open patterns
-  const modelMatch = text.match(/(?:montre|ouvre|بغيت نشوف|ورّيني|show|open).+?(c3.?aircross|c5.?aircross|berlingo|بيرلينجو|برلينجو)/i);
+  // Model open patterns — Jeep range.
+  const modelMatch = text.match(/(?:montre|ouvre|بغيت نشوف|ورّيني|show|open).+?(avenger|compass|wrangler|grand.?cherokee|renegade|أفنجر|افنجر|كومباس|رانجلر|رينيجايد|شيروكي)/i);
   if (modelMatch) {
     const raw = (modelMatch[1] ?? "").toLowerCase();
-    const slugMap: Record<string, string> = {
-      berlingo: "berlingo", بيرلينجو: "berlingo", برلينجو: "berlingo",
-    };
-    const matched = raw.includes("c3") ? "c3-aircross" : raw.includes("c5") ? "c5-aircross" : slugMap[raw] ?? "berlingo";
+    const matched =
+      /cherokee|شيروكي/.test(raw) ? "grand-cherokee"
+      : /wrangler|رانجلر/.test(raw) ? "wrangler"
+      : /compass|كومباس/.test(raw) ? "compass"
+      : /renegade|رينيجايد/.test(raw) ? "renegade"
+      : "avenger";
     return { name: "open_model", input: { slug: matched } };
   }
 
-  // Reservation intent
-  if (/(?:réserv|حجز|بغيت نحجز|reserve|book)/i.test(text) && slug) {
-    return { name: "start_reservation", input: { slug } };
-  }
+  // NOTE: the old start_reservation fast-path is gone with the tool — a
+  // reservation ask now flows through the normal qualification → book_test_drive.
 
   return null;
 }
